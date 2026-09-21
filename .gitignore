@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.env
+
+# API keys — never commit
+.env.local
+*.env
+
+# Generated output (reproducible from a run, exclude from repo)
+dashboard.html
+dashboard.json
+
+# State (decisions and trace are generated; prefs are small enough to commit)
+state/decisions.json
+state/trace.jsonl
+
+# Outbox messages (may contain sensitive info)
+outbox/
+
+# macOS
+.DS_Store
