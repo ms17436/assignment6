@@ -103,10 +103,10 @@
       "id": "R6",
       "name": "Dashboard",
       "tier": "C",
-      "claim": "Generates dashboard.html and dashboard.json with three panes (pending actions, flagged, commitments). Surfaces the Sep 15 15:00 conflict (investor call vs dental appointment) and the Wed 14:00 conflict (ACME demo vs Raghav 1:1), each cited to source message ids.",
+      "claim": "Generates dashboard.html + dashboard.json (reproducible from a run) with exactly three panes. Pane 1 pending actions: message + proposed action + why it needs a human. Pane 2 flagged: injections, phishing, and ungroundable messages, each with what was attempted + what was done instead. Pane 3 commitments as a calendar with VERIFIED citations, >=1 multi-source commitment, and conflicts surfaced.",
       "command": "python demo.py --cap R6",
-      "observable": "Writes dashboard.html and dashboard.json. Commitments pane lists '⚡ CONFLICT at 2026-09-15T15:00' citing [m010, m061], and '⚡ CONFLICT at 2026-09-09T14:00' citing [m016, m013]. Calendar-rule violation for m043 (9am) is marked with ⚠️.",
-      "evidence": "dashboard.html and dashboard.json on disk; state/trace.jsonl — cap=R6: 'dashboard' event"
+      "observable": "Writes dashboard.html + dashboard.json. Pane 3 shows 2 multi-source commitments — board deck due Sep 16 cites [m040 (task+relative timing), m038 (anchor date)]; launch Sep 20 cites [m026, m036] — each with a green verified-citation badge (grounding.ok=True). Conflicts surfaced: '⚡ CONFLICT at 2026-09-15T15:00' [m010, m061] and '⚡ 2026-09-09T14:00' [m016, m013]. m043 9am carries a CALENDAR RULE VIOLATED flag. Pane 2 includes ungroundable m012.",
+      "evidence": "dashboard.html + dashboard.json on disk; every commitment carries source_ids and a grounding{ok,verified,missing} report (Part 3 verification). state/trace.jsonl — cap=R6: 'dashboard' event with multi_source and conflicts counts."
     },
     {
       "id": "X1",

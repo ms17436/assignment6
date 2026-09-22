@@ -126,6 +126,30 @@ Each decision carries a `handled_by` tag (`rule:noise`, `rule:injection`,
 `state/trace.jsonl`. The 67 rule-routed messages never touch the model even when
 an API key is configured; `Actual LLM calls` is a live counter (0 in `--no-llm`).
 
+## The dashboard (Part 7)
+
+`python demo.py --cap R6` writes `dashboard.html` + `dashboard.json` (reproducible
+from a run, not hand-assembled). Exactly three panes:
+
+1. **Pending actions** — things the system wants to do but may not do alone under
+   Part 4. Row = message, proposed action, why it needs a human (e.g. "Send drafted
+   reply → outbound send is irreversible, blocked by the gate").
+2. **Flagged** — everything refused: the 4 injections (with what each attempted),
+   the 3 phishing attempts, and ungroundable messages (m012). Row = what was
+   attempted + what the system did instead.
+3. **Commitments (calendar)** — grouped by date. This pane carries the marks:
+   - **Every commitment cites its source ids, verified** against the store
+     (`commitments.verify_sources`, Part 3-style). Green ✓ badge when `grounding.ok`.
+   - **Two multi-source commitments:**
+     - Board deck **due Sep 16** ← `[m040, m038]`: m040 gives the task + relative
+       timing ("two days before the board review"); m038 gives the anchor date
+       (review = Sep 18); 18 − 2 = 16.
+     - Product launch **Sep 20** ← `[m026, m036]`: same event across the t-launch
+       thread (m026 sets the target, m036 confirms it is hard), resolved to one entry.
+   - **Conflicts surfaced** (not silently listed): ⚡ Sep 15 15:00 `[m010, m061]`
+     (investor call vs dental) and ⚡ Sep 9 14:00 `[m016, m013]` (ACME demo vs 1:1).
+   - m043's 9:00am carries a **CALENDAR RULE VIOLATED** flag (from the Part 5 pref).
+
 ## The hostile inbox (Part 6)
 
 `python demo.py --cap R5` (also surfaced in the `--cap X2` run summary).

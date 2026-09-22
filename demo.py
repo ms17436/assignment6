@@ -465,14 +465,31 @@ def cap_r6(decisions: list[dict] = None, use_llm: bool = True):
 
     s = board["summary"]
     print(f"\nSummary:")
-    print(f"  Total messages:  {s['total_messages']}")
-    print(f"  Pending actions: {s['pending_actions']}")
-    print(f"  Flagged:         {s['flagged']}")
-    print(f"  Auto-archived:   {s['archived']}")
-    print(f"  Commitments:     {s['commitments']}")
-    print(f"  Conflicts:       {s['conflicts']}")
+    print(f"  Total messages:            {s['total_messages']}")
+    print(f"  Pane 1 pending actions:    {s['pending_actions']}")
+    print(f"  Pane 2 flagged:            {s['flagged']}")
+    print(f"  Pane 3 commitments:        {s['commitments']}  "
+          f"({s['multi_source_commitments']} multi-source)")
+    print(f"  Conflicts surfaced:        {s['conflicts']}")
 
-    trace.log_event("R6", "dashboard", html=str(html_path), json=str(json_path))
+    # Show the multi-source commitment(s) with verified citations (Part 7 marks)
+    print("\n  Multi-source commitments (date from one msg, 'what' from another):")
+    for c in board["pane3_commitments"]:
+        if c.get("multi_source"):
+            g = c.get("grounding", {})
+            print(f"    • {c['date']} {c.get('description','')[:55]}")
+            print(f"      cites {c['source_ids']}  (verified ok={g.get('ok')}, missing={g.get('missing')})")
+
+    # Show conflicts explicitly (surfaced, not silently listed)
+    print("\n  Conflicts:")
+    for cf in board["pane3_conflicts"]:
+        ids = ", ".join(cf.get("source_ids", []))
+        print(f"    ⚡ {cf['slot']} — {len(cf['items'])} items (sources: {ids})")
+        for it in cf["items"]:
+            print(f"        - [{','.join(it.get('source_ids', []))}] {it.get('description','')[:60]}")
+
+    trace.log_event("R6", "dashboard", html=str(html_path), json=str(json_path),
+                    multi_source=s['multi_source_commitments'], conflicts=s['conflicts'])
     return board
 
 
