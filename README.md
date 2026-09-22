@@ -42,6 +42,10 @@ python demo.py --cap R5             # detect all 4 prompt injections
 python demo.py --cap R6             # generate dashboard.html
 python demo.py --cap X1             # follow-up tracker
 python demo.py --cap X2             # morning digest
+python demo.py --cap X3             # batch category handler (Tier A, no LLM)
+python demo.py --cap X4 --thread t-launch  # summarize thread to its open question
+python demo.py --cap X5 --msg m051  # tone matching to the correspondent
+python demo.py --cap X6 --msg m023  # explain why a message was handled that way
 ```
 
 ---

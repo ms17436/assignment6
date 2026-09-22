@@ -126,6 +126,26 @@ Each decision carries a `handled_by` tag (`rule:noise`, `rule:injection`,
 `state/trace.jsonl`. The 67 rule-routed messages never touch the model even when
 an API key is configured; `Actual LLM calls` is a live counter (0 in `--no-llm`).
 
+## Own capabilities (Part 8)
+
+Four added capabilities, each runnable on its own with judgeable output, spread
+across the tiers (rule 1 satisfied: A, B and C all present):
+
+- **X3 — Batch category handler (Tier A, no LLM).** `python demo.py --cap X3`.
+  Groups ~56 automated messages into receipts / newsletters / notifications /
+  security alerts / shipping / calendar, batch-archives them (reversible), and
+  flags newsletters as unsubscribe candidates. Pure rules.
+- **X4 — Thread summarizer (Tier B).** `python demo.py --cap X4 --thread t-launch`.
+  Collapses the 9-message launch thread to participants + summary + the **buried
+  open question** ("approve pricing copy by the 12th"), citing **m030**.
+- **X5 — Tone matching (Tier B).** `python demo.py --cap X5 --msg m051`.
+  Detects the correspondent relationship and drafts in a matching register —
+  old friend (m051) → warm/casual, lawyer (m018) → formal, investor (m010) → crisp.
+- **X6 — Explainability (Tier C).** `python demo.py --cap X6 --msg m023`.
+  Reconstructs the full reasoning chain in pipeline order (which checks fired,
+  which stored preferences applied, what retrieval grounded a reply, final
+  disposition + why + whether gated). Makes every decision auditable.
+
 ## The dashboard (Part 7)
 
 `python demo.py --cap R6` writes `dashboard.html` + `dashboard.json` (reproducible
@@ -296,6 +316,13 @@ a `retrieval.methods` list, both written to `state/trace.jsonl`.
 | R6 | Dashboard | C | three panes, Sep 15 15:00 conflict surfaced, cited to source messages |
 | X1 | Follow-up tracking | B | m044 (unanswered invoice request) found; chase draft produced |
 | X2 | Morning digest | B | urgent items separated from noise; archived count shown |
+| X3 | Batch category handler | A | rules-only: group + batch-archive ~56 noise msgs, flag unsubscribes |
+| X4 | Thread summarizer | B | collapse 9-msg t-launch thread to its buried open question (m030) |
+| X5 | Tone matching | B | match reply tone to correspondent (lawyer/board/investor/old friend) |
+| X6 | Explainability | C | "why did you do that?" — full reasoning chain for any message |
+
+**Tier coverage (Part 8 rule 1):** A = X3; B = R1, R2, X1, X2, X4, X5;
+C = R3, R4, R5, R6, X6. All three tiers present.
 
 Full command, observable outcome, and evidence in `capabilities.json`.
 

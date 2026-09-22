@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from agent import loader, classifier, injection, preferences, drafter, gate, trace
 from agent import followup, digest as digest_mod, dashboard as dash_mod, commitments
+from agent import batch, summarize, tone as tone_mod, explain as explain_mod
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +540,110 @@ def cap_x2(decisions: list[dict] = None, use_llm: bool = True):
     return dg
 
 
+def cap_x3():
+    """X3 — Batch category handler (Tier A): group + batch-archive noise."""
+    print("\n" + "=" * 60)
+    print("X3: Batch Category Handler (Tier A — rules only, no LLM)")
+    print("=" * 60)
+
+    report = batch.run()
+    print(f"\nBatched {report['total_batched']} automated message(s) into categories:\n")
+    print(f"  {'CATEGORY':<20}{'COUNT':<8}IDS")
+    print("  " + "-" * 60)
+    for cat, ids in report["categories"].items():
+        preview = ", ".join(ids[:6]) + (" …" if len(ids) > 6 else "")
+        print(f"  {cat:<20}{len(ids):<8}{preview}")
+    print(f"\n  Unsubscribe candidates ({len(report['unsubscribe_candidates'])}): "
+          f"{', '.join(report['unsubscribe_candidates'][:10])}"
+          f"{' …' if len(report['unsubscribe_candidates']) > 10 else ''}")
+    print("\n  (All batch-archived — reversible; no gate needed.)")
+    trace.log_event("X3", "batch", total=report["total_batched"],
+                    categories={k: len(v) for k, v in report["categories"].items()})
+    return report
+
+
+def cap_x4(thread_id: str = "t-launch", use_llm: bool = True):
+    """X4 — Thread summarizer (Tier B): collapse a thread to its open question."""
+    print("\n" + "=" * 60)
+    print(f"X4: Thread Summarizer — {thread_id}")
+    print("=" * 60)
+
+    result = summarize.summarize_thread(thread_id, use_llm=use_llm)
+    if "error" in result:
+        print(f"ERROR: {result['error']}")
+        return result
+
+    print(f"\nThread:        {result['thread_id']}  ({result['message_count']} messages)")
+    print(f"Participants:  {', '.join(result['participants'])}")
+    print(f"\nSummary:\n  {result.get('summary','')}")
+    print(f"\n🎯 OPEN QUESTION (what needs Sam):\n  {result.get('open_question','none')}")
+    print(f"   Source message(s): {result.get('owner_action_ids', [])}")
+    if result.get("deadline"):
+        print(f"   Deadline: {result['deadline']}")
+    trace.log_event("X4", "thread_summary", thread_id=thread_id,
+                    owner_action_ids=result.get("owner_action_ids", []))
+    return result
+
+
+def cap_x5(msg_id: str = "m051", use_llm: bool = True):
+    """X5 — Tone matching (Tier B): match reply tone to the correspondent."""
+    print("\n" + "=" * 60)
+    print(f"X5: Tone Matching — {msg_id}")
+    print("=" * 60)
+
+    msgs_by_id = loader.by_id()
+    if msg_id not in msgs_by_id:
+        print(f"ERROR: message {msg_id} not found.")
+        return
+    msg = msgs_by_id[msg_id]
+
+    # Show the relationship→tone mapping across a few contrasting correspondents
+    print("\nRelationship → tone mapping (contrast):")
+    for demo_id in [msg_id, "m018", "m038", "m010"]:
+        dm = msgs_by_id.get(demo_id)
+        if not dm:
+            continue
+        rel, t = tone_mod.classify_relationship(dm)
+        mark = " ← target" if demo_id == msg_id else ""
+        print(f"  {demo_id} ({dm.get('from','')}): {rel} → {t[:45]}{mark}")
+
+    draft = tone_mod.draft_with_tone(msg, use_llm=use_llm)
+    print(f"\nDraft for {msg_id} in '{draft['relationship']}' tone:")
+    print(f"  Tone: {draft['tone_guidance']}")
+    print(f"\n  To: {draft.get('to','')}")
+    print(f"  {draft.get('body','')}")
+    trace.log_event("X5", "tone", message_id=msg_id,
+                    relationship=draft["relationship"])
+    return draft
+
+
+def cap_x6(msg_id: str = "m023", use_llm: bool = False):
+    """X6 — Explainability (Tier C): ask the system why it did something."""
+    print("\n" + "=" * 60)
+    print(f"X6: Explainability — why did you handle {msg_id} that way?")
+    print("=" * 60)
+
+    result = explain_mod.explain(msg_id, use_llm=use_llm)
+    if "error" in result:
+        print(f"ERROR: {result['error']}")
+        return result
+
+    print(f"\nMessage {result['message_id']} from {result['from']}")
+    print(f"Subject: {result['subject']}\n")
+    print("Reasoning chain (in pipeline order):")
+    for i, step in enumerate(result["pipeline_steps"], 1):
+        mark = "✓ FIRED" if step["fired"] else "·  skip"
+        print(f"  {i}. [{mark}] {step['check']}: {step['detail']}")
+    print(f"\n→ Final disposition: {result['final_disposition']}")
+    print(f"→ Why: {result['why']}")
+    print(f"→ Gated (Part 4): {result['gated']}")
+    if result.get("applied_preferences"):
+        print(f"→ Stored preferences applied: {result['applied_preferences']}")
+    trace.log_event("X6", "explanation", message_id=msg_id,
+                    disposition=result["final_disposition"])
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -553,6 +658,7 @@ def main():
     parser.add_argument("--clear-trace", action="store_true", help="Clear trace.jsonl before running")
     parser.add_argument("--phase", choices=["store", "apply", "both"], default="both",
                         help="For --cap R4: 'store' then exit, 'apply' in a fresh process")
+    parser.add_argument("--thread", default="t-launch", help="Thread id for --cap X4")
     args = parser.parse_args()
 
     use_llm = not args.no_llm
@@ -579,6 +685,10 @@ def main():
         cap_r6(decisions=decisions, use_llm=use_llm)
         cap_x1(use_llm=use_llm)
         cap_x2(decisions=decisions, use_llm=use_llm)
+        cap_x3()
+        cap_x4(args.thread, use_llm=use_llm)
+        cap_x5(args.msg if args.msg != "m008" else "m051", use_llm=use_llm)
+        cap_x6(args.msg if args.msg != "m008" else "m023", use_llm=use_llm)
         return
 
     cap = args.cap.upper()
@@ -598,6 +708,14 @@ def main():
         cap_x1(use_llm=use_llm)
     elif cap == "X2":
         cap_x2(use_llm=use_llm)
+    elif cap == "X3":
+        cap_x3()
+    elif cap == "X4":
+        cap_x4(args.thread, use_llm=use_llm)
+    elif cap == "X5":
+        cap_x5(args.msg if args.msg != "m008" else "m051", use_llm=use_llm)
+    elif cap == "X6":
+        cap_x6(args.msg if args.msg != "m008" else "m023", use_llm=use_llm)
     else:
         print(f"Unknown capability: {args.cap}")
         parser.print_help()

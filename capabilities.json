@@ -125,6 +125,42 @@
       "command": "python demo.py --cap X2",
       "observable": "Prints three sections. 'NEEDS YOU' contains m010 (investor call) and m018 (SAFE signature); 'AUTO-ARCHIVED' shows a count of ~52 noise messages, not individual receipts.",
       "evidence": "state/trace.jsonl — cap=X2: 'digest' event with needs_you count, can_wait count, auto_archived count"
+    },
+    {
+      "id": "X3",
+      "name": "Batch category handler",
+      "tier": "A",
+      "claim": "Deterministically (no LLM) groups all automated mail into categories (receipts, newsletters, notifications, security alerts, shipping, calendar) and batch-archives them in one reversible sweep, flagging newsletters as unsubscribe candidates.",
+      "command": "python demo.py --cap X3",
+      "observable": "Prints a category table with counts and message ids: e.g. receipt_invoice 18, notification 13, newsletter_digest 13, security_alert 4, shipping_order 3, calendar 2 (~56 total). Lists ~9 unsubscribe candidates. No model call is made.",
+      "evidence": "state/trace.jsonl — cap=X3: 'batch' event with per-category counts. Pure rules in agent/batch.py."
+    },
+    {
+      "id": "X4",
+      "name": "Thread summarizer",
+      "tier": "B",
+      "claim": "Collapses a long thread down to participants, a short summary, and the OPEN QUESTION buried in it — the request that needs the owner. Cites the source message id.",
+      "command": "python demo.py --cap X4 --thread t-launch",
+      "observable": "For the 9-message t-launch thread, prints participants and surfaces the buried request: 'Sam, can you approve the final pricing copy by the 12th?' with source message m030.",
+      "evidence": "state/trace.jsonl — cap=X4: 'thread_summary' event with owner_action_ids=[m030]. Deterministic buried-request finder in agent/summarize.py; LLM summary when available."
+    },
+    {
+      "id": "X5",
+      "name": "Tone matching",
+      "tier": "B",
+      "claim": "Classifies the relationship with a correspondent (lawyer, board, investor, press, candidate, old friend, vendor, colleague) and drafts a reply in a matching tone register.",
+      "command": "python demo.py --cap X5 --msg m051",
+      "observable": "Prints a relationship->tone contrast table: m051 (oldfriends.net)=old_friend/warm-casual, m018 (hartwellcho.com)=lawyer/formal, m038 (board)=formal, m010 (northwind.vc)=investor/crisp. Then drafts the m051 reply in the warm/casual register.",
+      "evidence": "state/trace.jsonl — cap=X5: 'tone' event with the detected relationship. Deterministic relationship map in agent/tone.py; tone-adjusted draft via drafter."
+    },
+    {
+      "id": "X6",
+      "name": "Explainability (why did you do that?)",
+      "tier": "C",
+      "claim": "For any message, reconstructs the full reasoning chain in pipeline order — which checks fired (injection/noise/phishing/preference/sent), which stored preferences applied, what retrieval grounded a reply, the final disposition and why, and whether the action was gated.",
+      "command": "python demo.py --cap X6 --msg m023   (try also --msg m043)",
+      "observable": "For m023: shows injection·skip, noise·skip, phishing✓FIRED -> disposition escalate, gated 'no money/credentials without you'. For m043: shows steps 1-5 skip, step 6 'calendar rule -> decline 09:00, counter-offer 11:00' FIRED, step 7 retrieval thread-walk=[m010].",
+      "evidence": "state/trace.jsonl — cap=X6: 'explanation' event with disposition. agent/explain.py re-runs the deterministic checks in the same order as classifier.classify and reads recorded trace events."
     }
   ]
 }
