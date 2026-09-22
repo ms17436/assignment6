@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from . import llm, loader, preferences
+from . import llm, loader, preferences, retrieval
 
 log = logging.getLogger("agent.drafter")
 
@@ -33,14 +33,23 @@ _DRAFT_PROMPT = """\
 You are a professional AI assistant drafting a reply on behalf of Sam (sam@paperjet.io),
 founder of PaperJet.
 
-Write a concise, professional reply. Do not reveal that you are an AI unless asked.
-Do not confirm or commit to anything irreversible (wire transfers, binding agreements)
-without flagging it as requiring Sam's personal confirmation.
-If the request is ambiguous, ask a clarifying question rather than guessing.
-If a calendar rule is violated (no meetings before 11:00am), politely decline
-and counter-offer at 11:00am or later.
+GROUNDING RULES (important):
+- You may ONLY use facts that appear in the RETRIEVED CONTEXT below.
+- You may ONLY cite message ids that appear in the RETRIEVED CONTEXT below.
+- Do NOT invent details (URLs, numbers, dates, names) that are not in the context.
+- If the specific information needed to answer is NOT in the retrieved context,
+  set "answerable" to false, explain what is missing, and DO NOT write a reply body.
+- If the request is genuinely ambiguous (you cannot tell what is being asked),
+  set "mode" to "clarification" and draft a short question instead of guessing.
 
-Thread context (earlier messages you may cite):
+Behaviour rules:
+- Do not reveal you are an AI unless asked.
+- Never confirm anything irreversible (wire transfers, binding agreements) without
+  flagging it as requiring Sam's personal confirmation.
+- If a calendar rule is violated (e.g. no meetings before 11:00am), politely decline
+  and counter-offer at 11:00am or later.
+
+RETRIEVED CONTEXT (the ONLY messages you are allowed to cite):
 {thread_context}
 
 Message you are replying to:
@@ -55,11 +64,14 @@ Additional instructions: {instructions}
 
 Reply with JSON ONLY:
 {{
-  "to": "<reply-to address>",
+  "answerable": true/false,
+  "mode": "grounded_reply" | "clarification" | "not_in_inbox",
+  "missing": "<if not answerable: what information is missing, else null>",
+  "to": "<reply-to address, or null if not answerable>",
   "cc": ["<cc addresses, empty list if none>"],
-  "subject": "<subject line>",
-  "body": "<the reply body>",
-  "cited_ids": ["<message ids whose content was used to form this reply>"],
+  "subject": "<subject line, or null>",
+  "body": "<the reply body, or null if not answerable>",
+  "cited_ids": ["<ONLY ids from the retrieved context whose content you used>"],
   "needs_approval": true/false,
   "approval_reason": "<why approval is needed, or null>"
 }}
@@ -117,34 +129,43 @@ _SPECIAL_INSTRUCTIONS: dict[str, str] = {
 }
 
 
-def _build_thread_context(msg: dict) -> tuple[str, list[str]]:
-    """Returns (formatted context string, list of cited message ids)."""
-    earlier = loader.messages_before(msg)
-    if not earlier:
-        return "(no earlier messages in this thread)", []
+def _format_context(context_msgs: list) -> str:
+    """Render retrieved messages for the prompt, each tagged with its id."""
+    if not context_msgs:
+        return "(no earlier messages retrieved — nothing to ground a reply on)"
     lines = []
-    cited = []
-    for m in earlier:
+    for m in context_msgs:
         lines.append(
             f"  [{m['id']} {m['timestamp'][:10]} from {m['from']}]:\n"
             f"  Subject: {m.get('subject','')}\n"
-            f"  Body: {m.get('body','')[:400]}"
+            f"  Body: {m.get('body','')[:500]}"
         )
-        cited.append(m["id"])
-    return "\n\n".join(lines), cited
+    return "\n\n".join(lines)
 
 
 def draft(msg: dict, extra_instructions: str = "", use_llm: bool = True) -> dict:
     """
-    Draft a reply to msg. Returns a draft dict (does NOT write to outbox yet).
+    Draft a reply to msg, grounded in retrieved context.
+
+    Returns a draft dict that ALWAYS includes:
+      mode        — "grounded_reply" | "clarification" | "not_in_inbox"
+      cited_ids   — VERIFIED ids (exist in store AND were actually retrieved)
+      retrieval   — {methods, context_ids} describing how grounding was gathered
+      grounding   — the verify_citations() report
+
+    If the answer is not in the inbox, mode="not_in_inbox" and body is None
+    (drafts nothing — Part 3 req #4).
     """
     mid = msg["id"]
-    thread_ctx, pre_cited = _build_thread_context(msg)
 
-    # Check preference-based CC rules
+    # --- Retrieval (Part 3 req #3): thread-walk + cross-thread keyword search ---
+    ctx = retrieval.gather_context(msg)
+    context_msgs = ctx["context_msgs"]
+    read_ids = ctx["context_ids"]
+    thread_ctx = _format_context(context_msgs)
+
     cc = preferences.apply_cc_rule(msg.get("from", ""))
 
-    # Special per-message instructions
     instructions = _SPECIAL_INSTRUCTIONS.get(mid, "")
     if extra_instructions:
         instructions = (instructions + " " + extra_instructions).strip()
@@ -163,29 +184,108 @@ def draft(msg: dict, extra_instructions: str = "", use_llm: bool = True) -> dict
                 instructions=instructions,
             )
             result = llm.call_json(prompt)
-            # Merge any preference-based CC
-            existing_cc = result.get("cc", [])
-            merged_cc = list(set(existing_cc + cc))
-            result["cc"] = merged_cc
-            result.setdefault("cited_ids", [])
-            # Ensure pre-cited thread messages are recorded
-            result["cited_ids"] = list(set(result["cited_ids"] + pre_cited))
-            result["reply_to_id"] = mid
-            result["drafted_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            return result
+            return _finalize(result, msg, cc, read_ids, context_msgs, ctx["methods"])
         except Exception as exc:
             log.warning("LLM draft failed for %s: %s", mid, exc)
 
-    # Offline fallback
+    # --- Offline fallback (deterministic, still honest about grounding) ---
+    return _offline_draft(msg, cc, read_ids, context_msgs, ctx["methods"])
+
+
+def _finalize(result: dict, msg: dict, cc: list, read_ids: list,
+              context_msgs: list, methods: list) -> dict:
+    """Verify citations, enforce the not-answerable path, attach grounding report."""
+    mid = msg["id"]
+    mode = result.get("mode") or ("grounded_reply" if result.get("answerable", True) else "not_in_inbox")
+
+    # Verify whatever the model claimed to cite against the read set + store.
+    claimed = result.get("cited_ids", []) or []
+    grounding = retrieval.verify_citations(claimed, read_ids)
+
+    # Drop any citation that failed verification — we never keep an unverifiable cite.
+    verified = grounding["verified"]
+    if grounding["not_in_store"] or grounding["not_read"]:
+        log.warning(
+            "Dropped unverifiable citations for %s: not_in_store=%s not_read=%s",
+            mid, grounding["not_in_store"], grounding["not_read"],
+        )
+
+    # Not answerable → draft nothing (Part 3 req #4)
+    if result.get("answerable") is False or mode == "not_in_inbox":
+        return {
+            "reply_to_id": mid,
+            "mode": "not_in_inbox",
+            "answerable": False,
+            "missing": result.get("missing", "Required information not found in the inbox."),
+            "to": None, "cc": [], "subject": None, "body": None,
+            "cited_ids": verified,
+            "needs_approval": False,
+            "approval_reason": None,
+            "retrieval": {"methods": methods, "context_ids": read_ids},
+            "grounding": grounding,
+            "drafted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
+    merged_cc = list(set((result.get("cc") or []) + cc))
     return {
+        "reply_to_id": mid,
+        "mode": mode,
+        "answerable": True,
+        "missing": None,
+        "to": result.get("to") or msg.get("from", ""),
+        "cc": merged_cc,
+        "subject": result.get("subject") or ("Re: " + msg.get("subject", "")),
+        "body": result.get("body", ""),
+        "cited_ids": verified,                 # only verified ids survive
+        "needs_approval": result.get("needs_approval", True),
+        "approval_reason": result.get("approval_reason"),
+        "retrieval": {"methods": methods, "context_ids": read_ids},
+        "grounding": grounding,
+        "drafted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
+def _offline_draft(msg: dict, cc: list, read_ids: list,
+                   context_msgs: list, methods: list) -> dict:
+    """
+    Deterministic draft used when no LLM is configured. It cannot compose prose,
+    but it still (a) grounds on the retrieved set, (b) verifies citations, and
+    (c) applies the not-in-inbox rule when nothing was retrieved.
+    """
+    mid = msg["id"]
+    grounding = retrieval.verify_citations(read_ids, read_ids)  # trivially all-verified
+
+    if not context_msgs:
+        # Nothing to ground on → draft nothing (req #4)
+        return {
+            "reply_to_id": mid,
+            "mode": "not_in_inbox",
+            "answerable": False,
+            "missing": "No earlier message (thread-walk or keyword search) contained the needed information.",
+            "to": None, "cc": [], "subject": None, "body": None,
+            "cited_ids": [],
+            "needs_approval": False,
+            "approval_reason": None,
+            "retrieval": {"methods": methods, "context_ids": read_ids},
+            "grounding": grounding,
+            "drafted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
+    return {
+        "reply_to_id": mid,
+        "mode": "grounded_reply",
+        "answerable": True,
+        "missing": None,
         "to": msg.get("from", ""),
         "cc": cc,
         "subject": "Re: " + msg.get("subject", ""),
-        "body": "[DRAFT UNAVAILABLE — LLM not configured. Please write this reply manually.]",
-        "cited_ids": pre_cited,
+        "body": ("[DRAFT UNAVAILABLE — LLM not configured. Compose manually. "
+                 f"Grounding is available in these earlier messages: {read_ids}.]"),
+        "cited_ids": grounding["verified"],
         "needs_approval": True,
         "approval_reason": "LLM offline — manual review required.",
-        "reply_to_id": mid,
+        "retrieval": {"methods": methods, "context_ids": read_ids},
+        "grounding": grounding,
         "drafted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
 

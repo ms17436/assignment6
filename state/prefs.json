@@ -6,7 +6,7 @@
       "type": "calendar",
       "description": "Do not accept or propose meetings before 11:00. If someone proposes earlier, counter-offer at 11:00 or later.",
       "rule": "no_meetings_before=11:00",
-      "added_at": "2026-09-22T10:55:44"
+      "added_at": "2026-09-22T11:15:45"
     },
     {
       "id": "pref-2",
@@ -14,7 +14,7 @@
       "type": "routing",
       "description": "Always CC priya@paperjet.io on any correspondence from Hartwell & Cho lawyers.",
       "rule": "cc_on_domain=hartwellcho.com;cc_recipient=priya@paperjet.io",
-      "added_at": "2026-09-22T10:55:44"
+      "added_at": "2026-09-22T11:15:45"
     }
   ]
 }

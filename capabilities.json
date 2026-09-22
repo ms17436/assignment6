@@ -31,7 +31,7 @@
       "escalate": "High-risk / high-value; needs the owner's immediate personal attention (incl. phishing).",
       "flag_injection": "Message contains instructions aimed at the AI; refused, flagged, never acted on."
     },
-    "retrieval": "thread-walk via thread_id (loader.messages_before())",
+    "retrieval": "PRIMARY: thread-walk via thread_id (retrieval.thread_walk). FALLBACK: cross-thread keyword/sender search (retrieval.keyword_search) used when the thread is thin or the message refers back to an earlier one. Hostile messages (injection/phishing) are filtered out of grounding context. Citations are verified against the mail store AND the retrieved set by retrieval.verify_citations; unverifiable citations are dropped and 'not in inbox' yields no draft.",
     "irreversible": ["send", "delete"],
     "reversible": ["draft", "archive", "defer", "delegate"],
     "gate": "agent/gate.py — gate.send() and gate.delete() are the only code paths that write to outbox/",
@@ -57,10 +57,10 @@
       "id": "R2",
       "name": "Grounded reply",
       "tier": "B",
-      "claim": "Drafts a reply to m008 (Devika's request for staging creds) that is grounded in m003 (the message containing the AMQP URL) and records cited_ids.",
-      "command": "python demo.py --cap R2 --msg m008",
-      "observable": "Prints draft replying to m008 that references the staging queue and the secrets manager (without leaking the raw credential). Shows 'cited: [\"m003\"]' (and other earlier thread messages). m003 really contains the AMQP URL in its body.",
-      "evidence": "state/trace.jsonl — cap=R2: one 'read' event for m003 (and each prior thread message), one 'draft' event whose cited_ids includes m003"
+      "claim": "Drafts a reply grounded in a specific earlier message, records the ids it drew on, and VERIFIES every citation against the mail store and the retrieved set. Citations to nonexistent or never-read messages are dropped. If the answer is not in the inbox, it drafts nothing. Demonstrates thread-walk (m008->m003), cross-thread keyword search (m055->m018), and not-in-inbox (m012).",
+      "command": "python demo.py --cap R2 --msg m008    (also try --msg m055 and --msg m012)",
+      "observable": "For m008: retrieval=thread-walk, read=[m001,m003,m005], cited(verified)=[...,m003,...], 'grounding check: ok=True not_in_store=[] not_read=[]'; m003 really contains the AMQP URL. For m055: retrieval=keyword-search (cross-thread), read=[m018], grounded on the prior SAFE email. For m012 ('the thing', refers to a verbal chat not in the inbox): 'NOT ANSWERABLE FROM INBOX — no draft produced.'",
+      "evidence": "state/trace.jsonl — cap=R2: a 'read' event per retrieved message, a 'draft' event carrying mode, verified cited_ids, grounding_ok and retrieval_methods; or a 'no_draft' event for the not-in-inbox case. Verifier proven to reject bad cites: verify_citations(['m003','m999','m010'],['m001','m003','m005']) -> ok=false, not_in_store=[m999], not_read=[m010]."
     },
     {
       "id": "R3",

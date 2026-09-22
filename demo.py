@@ -146,14 +146,35 @@ def cap_r2(msg_id: str, use_llm: bool = True, dry_run: bool = False):
         return
 
     msg = msgs_by_id[msg_id]
-    earlier = loader.messages_before(msg)
 
-    # Log the 'read' events for the thread context
-    for m in earlier:
+    # --- Retrieval (Part 3 req #3) ---
+    from agent import retrieval
+    ctx = retrieval.gather_context(msg)
+    read_ids = ctx["context_ids"]
+    methods = ctx["methods"]
+
+    print(f"\nReplying to {msg_id} from {msg.get('from','')}: \"{msg.get('subject','')}\"")
+    print(f"Retrieval method(s): {', '.join(methods) if methods else 'none'}")
+    print(f"Retrieved / read: {read_ids or '(nothing)'}")
+
+    # Log a 'read' event for every message we actually retrieved
+    for m in ctx["context_msgs"]:
         trace.log_event("R2", "read", message_id=m["id"], role="context",
                         subject=m.get("subject", ""))
 
     draft = drafter.draft(msg, use_llm=use_llm)
+    mode = draft.get("mode", "grounded_reply")
+
+    # --- Part 3 req #4: information not in inbox → draft nothing ---
+    if mode == "not_in_inbox" or draft.get("answerable") is False:
+        print("\n🚫 NOT ANSWERABLE FROM INBOX — no draft produced.")
+        print(f"   Missing: {draft.get('missing','(unspecified)')}")
+        trace.log_event("R2", "no_draft", message_id=msg_id,
+                        reason="not_in_inbox", missing=draft.get("missing", ""))
+        return draft
+
+    if mode == "clarification":
+        print("\n❓ AMBIGUOUS — drafting a clarifying question instead of guessing.")
 
     print(f"\nReply to:  {draft.get('to', '')}")
     cc = draft.get("cc", [])
@@ -161,17 +182,25 @@ def cap_r2(msg_id: str, use_llm: bool = True, dry_run: bool = False):
         print(f"CC:        {', '.join(cc)}")
     print(f"Subject:   {draft.get('subject', '')}")
     print(f"\nBody:\n{draft.get('body', '')}")
+
+    # --- Part 3 req #2: citations verified against the mail store + read set ---
+    g = draft.get("grounding", {})
     cited = draft.get("cited_ids", [])
-    print(f"\ncited: {cited}")
+    print(f"\ncited (verified): {cited}")
+    print(f"grounding check: ok={g.get('ok')} "
+          f"verified={g.get('verified')} "
+          f"not_in_store={g.get('not_in_store')} "
+          f"not_read={g.get('not_read')}")
 
     if draft.get("needs_approval"):
         print(f"\n⚠️  Approval required: {draft.get('approval_reason','')}")
 
-    trace.log_event("R2", "draft", message_id=msg_id,
-                    cited_ids=cited, needs_approval=draft.get("needs_approval"))
+    trace.log_event("R2", "draft", message_id=msg_id, mode=mode,
+                    cited_ids=cited, grounding_ok=g.get("ok"),
+                    retrieval_methods=methods,
+                    needs_approval=draft.get("needs_approval"))
 
     if not dry_run:
-        # Ask whether to send via gate
         try:
             ans = input("\nSend this draft? [y/N] ").strip().lower()
             if ans in ("y", "yes"):

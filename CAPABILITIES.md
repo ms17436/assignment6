@@ -62,10 +62,16 @@ can cause those effects, which is also the prompt-injection defence.
   back-off (up to 5 attempts), and logs each wait. Batch: noise and obvious
   injections never hit the LLM at all.
 
-- **Retrieval: thread-walk.** `loader.messages_before()` walks `thread_id` to
-  get all prior messages in a thread. This is cheaper and more precise than
-  embedding search for a structured inbox. Used in R2 to ground the Devika
-  reply on m003's AMQP URL.
+- **Retrieval: thread-walk (primary) + cross-thread keyword search (fallback).**
+  `retrieval.thread_walk()` walks `thread_id` for prior messages — cheaper and
+  more precise than embeddings for a structured inbox. When the thread is thin or
+  a message refers back to an earlier one ("previous email", "resend"),
+  `retrieval.keyword_search()` does a conservative cross-thread lookup (content
+  overlap, or same-correspondent + explicit back-reference). Hostile messages
+  (injection/phishing) are filtered out of grounding context. Every citation is
+  verified by `retrieval.verify_citations()` against both the mail store and the
+  retrieved set; unverifiable citations are dropped, and if nothing grounds the
+  answer the system drafts nothing.
 
 - **Reversible vs irreversible.** `send` and `delete` are irreversible and
   always pass through `gate.require_approval()`. `draft`, `archive`, `defer`,
@@ -115,6 +121,29 @@ Each decision carries a `handled_by` tag (`rule:noise`, `rule:injection`,
 `rule:phishing`, `rule:preference`, `rule:sent`, or `llm`) which is written to
 `state/trace.jsonl`. The 67 rule-routed messages never touch the model even when
 an API key is configured; `Actual LLM calls` is a live counter (0 in `--no-llm`).
+
+## Grounded answering (Part 3)
+
+Three outcomes, all reproducible with `python demo.py --cap R2 --msg <id>`:
+
+| message | retrieval | outcome |
+|---|---|---|
+| `m008` (Devika: "resend the staging URL") | thread-walk → m001, m003, m005 | grounded reply; `cited (verified)` includes **m003**, which really holds the AMQP URL |
+| `m055` (lawyer: "portal link in the **previous email**") | keyword-search (cross-thread) → **m018** | grounded on the prior SAFE email in a *different* thread |
+| `m012` (Priya: "that **thing** we talked about after the standup") | none (refers to a verbal chat) | **NOT ANSWERABLE FROM INBOX — no draft produced** |
+
+**Verification (req #2).** `retrieval.verify_citations(cited, read)` requires every
+cited id to (a) exist in the mail store and (b) be in the set actually retrieved.
+Proven to reject bad cites:
+
+```
+verify_citations(['m003','m999','m010'], ['m001','m003','m005'])
+→ ok=False, verified=['m003'], not_in_store=['m999'], not_read=['m010']
+```
+
+The drafter keeps only `verified` ids, so a hallucinated or unread citation can
+never appear in a finished draft. Each draft also carries a `grounding` report and
+a `retrieval.methods` list, both written to `state/trace.jsonl`.
 
 ## Inbox analysis (Part 1)
 
