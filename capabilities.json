@@ -3,7 +3,8 @@
   "repo": "https://github.com/[your-username]/paperjet-inbox-agent",
   "system": {
     "framework": "none — pure Python pipeline, no CrewAI/ADK/LangChain",
-    "model": "gemini-1.5-flash for triage and drafting. Developed offline with LLM_OFFLINE=1 to avoid rate limits during build.",
+    "model": "Pluggable. gemini-1.5-flash (GEMINI_API_KEY) or any OpenAI-compatible endpoint, OR a local model via the native Ollama backend (set OLLAMA_MODEL, e.g. qwen2.5:1.5b — no extra Python deps, uses stdlib urllib against http://localhost:11434). Developed offline with LLM_OFFLINE=1 / --no-llm to avoid rate limits.",
+    "local_model_note": "Tested live with Ollama qwen2.5:1.5b. Good at extraction/summarisation (X4 thread summary produced an accurate summary, buried question m030, deadline 2026-09-12). Weaker at the nuanced draft-answerability judgement in R2: the 1.5B model is confused by the Part 6 untrusted-data wrapping and sometimes marks a self-contained message as 'not answerable'. The pipeline degrades gracefully (deterministic fallback). A larger model handles the security framing and drafting simultaneously.",
     "rate_limit_handling": "LLM_CALL_DELAY=2s between calls; exponential backoff (up to 5 retries) on HTTP 429; noise and injections are rule-handled without LLM calls",
     "messages_processed": 100,
     "rule_routed_never_need_model": 67,

@@ -22,7 +22,12 @@ pip install -r requirements.txt
 # Set your API key (Gemini recommended)
 export GEMINI_API_KEY=your_key_here
 
-# Or use a local model via Ollama (OpenAI-compatible)
+# Or use a local model via the native Ollama backend (no extra Python deps)
+ollama serve &                    # start the local server
+export OLLAMA_MODEL=qwen2.5:1.5b  # or any pulled model; uses stdlib urllib
+export LLM_CALL_DELAY=0           # local model — no rate limit needed
+
+# Or an OpenAI-compatible endpoint (requires: pip install openai)
 export OPENAI_API_KEY=ollama
 export OPENAI_BASE_URL=http://localhost:11434/v1
 export OPENAI_MODEL=llama3.1:8b

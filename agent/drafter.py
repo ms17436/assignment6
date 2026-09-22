@@ -41,8 +41,12 @@ GROUNDING RULES (important):
 - You may ONLY use facts that appear in the RETRIEVED CONTEXT below.
 - You may ONLY cite message ids that appear in the RETRIEVED CONTEXT below.
 - Do NOT invent details (URLs, numbers, dates, names) that are not in the context.
-- If the specific information needed to answer is NOT in the retrieved context,
-  set "answerable" to false, explain what is missing, and DO NOT write a reply body.
+- This message has been analysed as: {answerability_hint}
+  * SELF-CONTAINED means it needs no earlier message — you already have everything
+    required, so answer it normally (answerable=true, cited_ids may be empty).
+  * REFERENTIAL means it points to an earlier message. Only then, if that earlier
+    info is missing from the retrieved context, set answerable=false and say what
+    is missing. Do NOT set answerable=false just because the context is short.
 - If the request is genuinely ambiguous (you cannot tell what is being asked),
   set "mode" to "clarification" and draft a short question instead of guessing.
 
@@ -183,6 +187,16 @@ def draft(msg: dict, extra_instructions: str = "", use_llm: bool = True) -> dict
                 f"subject: {msg.get('subject','')}\nbody: {msg.get('body','')[:2000]}",
                 label=mid,
             )
+            # Deterministic answerability hint so small models don't over-refuse.
+            if retrieval.refers_to_earlier(msg):
+                if read_ids:
+                    hint = f"REFERENTIAL (earlier context WAS retrieved: {read_ids})."
+                else:
+                    hint = "REFERENTIAL but NO earlier context was found — likely not answerable."
+            else:
+                hint = ("SELF-CONTAINED (needs no earlier context). You have "
+                        "everything required — you MUST set answerable=true and "
+                        "write a reply; do NOT refuse.")
             prompt = _DRAFT_PROMPT.format(
                 untrusted_preamble=llm.UNTRUSTED_PREAMBLE,
                 thread_context=thread_ctx,
@@ -191,6 +205,7 @@ def draft(msg: dict, extra_instructions: str = "", use_llm: bool = True) -> dict
                 body=body_block,
                 preferences=preferences.describe_all(),
                 instructions=instructions,
+                answerability_hint=hint,
             )
             result = llm.call_json(prompt)
             return _finalize(result, msg, cc, read_ids, context_msgs, ctx["methods"])

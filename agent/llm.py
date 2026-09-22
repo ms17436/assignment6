@@ -126,14 +126,57 @@ def _openai_call(prompt: str, model: Optional[str] = None) -> str:
     raise RuntimeError("OpenAI: exceeded max retries after rate limiting.")
 
 
+def _ollama_call(prompt: str, model: str) -> str:
+    """
+    Native Ollama backend using only the standard library (no extra packages).
+    Talks to the local server's /api/chat endpoint. Enable by setting
+    OLLAMA_MODEL (e.g. qwen2.5:1.5b). OLLAMA_HOST overrides the default host.
+    """
+    import urllib.request
+
+    global _CALL_COUNT
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    url = f"{host}/api/chat"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "options": {"temperature": 0.2},
+    }
+    data = json.dumps(payload).encode("utf-8")
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            _sleep_delay()
+            req = urllib.request.Request(url, data=data,
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            _CALL_COUNT += 1
+            return body.get("message", {}).get("content", "").strip()
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "rate" in err.lower():
+                wait = 2 ** attempt * 3
+                log.warning("Ollama busy. Waiting %ds (attempt %d/%d).", wait, attempt + 1, MAX_RETRIES)
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError("Ollama: exceeded max retries.")
+
+
 def call(prompt: str, model: Optional[str] = None) -> str:
     """
     Call the configured LLM. Returns the text response.
-    Falls back to a clearly-labelled stub if LLM_OFFLINE=1 or no key is set.
+    Selection order: LLM_OFFLINE → OLLAMA_MODEL → GEMINI_API_KEY → OPENAI_API_KEY → stub.
+    Falls back to a clearly-labelled stub if LLM_OFFLINE=1 or nothing is configured.
     """
     offline = os.environ.get("LLM_OFFLINE", "0") == "1"
     if offline:
         return _offline_stub(prompt)
+
+    if os.environ.get("OLLAMA_MODEL"):
+        return _ollama_call(prompt, model=model or os.environ["OLLAMA_MODEL"])
 
     if os.environ.get("GEMINI_API_KEY"):
         return _gemini_call(prompt, model=model or "gemini-1.5-flash")
@@ -141,7 +184,7 @@ def call(prompt: str, model: Optional[str] = None) -> str:
     if os.environ.get("OPENAI_API_KEY"):
         return _openai_call(prompt, model=model)
 
-    log.warning("No LLM API key found. Using offline stub.")
+    log.warning("No LLM configured. Using offline stub.")
     return _offline_stub(prompt)
 
 
