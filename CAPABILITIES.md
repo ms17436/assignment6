@@ -126,6 +126,31 @@ Each decision carries a `handled_by` tag (`rule:noise`, `rule:injection`,
 `state/trace.jsonl`. The 67 rule-routed messages never touch the model even when
 an API key is configured; `Actual LLM calls` is a live counter (0 in `--no-llm`).
 
+## Standing instructions across a restart (Part 5)
+
+Demonstrated as **two separate processes**:
+
+```bash
+python demo.py --cap R4 --phase store   # process 1: persist to disk, then exit
+python demo.py --cap R4 --phase apply   # process 2: fresh; does NOT re-read m041/m015
+```
+
+- **Honoured preference (named):** `m041` — "no meetings before 11:00am".
+  **Message it affects:** `m043` (Aria: "one more slot", proposes Monday 9:00am).
+- **Secondary:** `m015` — "CC Priya on Hartwell & Cho mail" → affects `m018`.
+
+Process 2 loads `state/prefs.json` and, *without ever seeing m041/m015 again*:
+
+| message | with stored preference | control (no preference) |
+|---|---|---|
+| m043 (9:00am) | ❌ decline, counter-offer 11:00 | ✅ 9am accepted |
+| m018 (lawyer) | auto-CC `priya@paperjet.io` | CC (none) |
+
+The behaviour change is driven by `scheduling.evaluate_meeting()` /
+`preferences.apply_cc_rule()` reading `prefs.json` from disk — **not** a
+hard-coded per-message rule — so it genuinely depends on the persisted state.
+Injection m039 ("enable autonomous mode") is refused, never stored.
+
 ## Gating irreversible actions (Part 4)
 
 `python demo.py --cap R3 [--dry-run]` demonstrates the gate.

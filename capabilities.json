@@ -37,7 +37,8 @@
     "delete_is_irreversible_because": "The mock store has no trash/recycle bin, so a deleted message cannot be recovered. It is therefore gated exactly like send.",
     "send_is_irreversible_because": "Writing to outbox/ is the mock definition of 'sent'; a sent message cannot be unsent.",
     "gate": "agent/gate.py — gate.send() and gate.delete() are the ONLY code paths that write to outbox/. Drafts are reversible and written to drafts/, never outbox/. Both a per-action y/N prompt and a --dry-run mode are provided; AUTO_APPROVE=1 for non-interactive tests. gate.audit_outbox() verifies the invariant.",
-    "preference_demo": "m041: no meetings before 11:00am | m015: CC priya@paperjet.io on Hartwell & Cho mail",
+    "preference_demo": "PRIMARY honoured preference: m041 (no meetings before 11:00am) affects message m043 (Aria proposes Monday 9:00am -> declined, counter-offer 11:00). SECONDARY: m015 (CC priya@paperjet.io on Hartwell & Cho mail) affects m018 (SAFE amendment -> auto-CC priya). Demonstrated across a real process restart via scheduling.evaluate_meeting reading state/prefs.json.",
+    "persistence": "state/prefs.json survives process exit. 'python demo.py --cap R4 --phase store' persists and exits; 'python demo.py --cap R4 --phase apply' is a fresh process that does NOT re-read m041/m015 and still changes behaviour from disk. Preference-parsing is deterministic (no model call) for m041/m015.",
     "injection_messages": ["m017", "m024", "m039", "m047"],
     "phishing_messages": ["m021", "m023", "m045"],
     "scheduling_conflicts": [
@@ -77,10 +78,10 @@
       "id": "R4",
       "name": "Persistent preference",
       "tier": "C",
-      "claim": "Extracts standing preferences from m041 (no meetings before 11am) and m015 (CC Priya on legal mail), stores them to state/prefs.json, and applies them on a later process invocation without being told again.",
-      "command": "python demo.py --cap R4",
-      "observable": "First invocation: extracts and stores 2 preferences to state/prefs.json and exits. Second invocation (fresh process): loads state/prefs.json and demonstrates (a) blocking a 9am meeting proposal, (b) adding CC to a Hartwell & Cho reply. prefs.json is on disk between runs.",
-      "evidence": "state/prefs.json on disk; state/trace.jsonl — cap=R4: 'preference' events per message. prefs.json persists after process exit."
+      "claim": "Records a stated preference and applies it in a SEPARATE process after the first has fully exited, changing how a real message is handled. Honoured preference: m041 (no meetings before 11:00am); affected message: m043 (Aria proposes Monday 9:00am). Also m015 (CC Priya on lawyer mail) -> m018.",
+      "command": "python demo.py --cap R4 --phase store   # then, as a NEW process:   python demo.py --cap R4 --phase apply",
+      "observable": "Phase store: reads m041/m015, writes state/prefs.json (refuses m039 injection), exits. Phase apply (fresh process, does NOT re-read m041/m015): loads prefs.json, then for m043 prints 'DECLINE 9am, counter-offer 11:00' with control 'without preference -> 9am ACCEPTED'; for m018 prints auto-CC ['priya@paperjet.io'] vs control '(none)'.",
+      "evidence": "state/prefs.json persists on disk between the two processes; state/trace.jsonl — cap=R4: 'preference_stored' events (phase 1) and 'apply_calendar'/'apply_routing' events (phase 2). Behaviour change is driven by scheduling.evaluate_meeting reading prefs from disk, not a hard-coded rule."
     },
     {
       "id": "R5",

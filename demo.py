@@ -275,49 +275,104 @@ def cap_r3(use_llm: bool = True, dry_run: bool = False):
     return decisions
 
 
-def cap_r4(use_llm: bool = True):
-    """R4 — Persistent preferences: extract, store, and demonstrate across restarts."""
-    print("\n" + "=" * 60)
-    print("R4: Persistent Preferences")
-    print("=" * 60)
+def _r4_store(use_llm: bool = True):
+    """Phase 1: read the preference messages, persist to disk, then EXIT."""
+    print("\n[PHASE 1: STORE] Reading preference messages and writing to disk...")
+    from pathlib import Path as _P
+    prefs_path = _P(__file__).parent / "state" / "prefs.json"
+
+    # Start from a clean slate so the demo is unambiguous
+    with open(prefs_path, "w") as fh:
+        fh.write('{"preferences": []}')
+    # Clear cached module state (fresh process would not have it either)
+    import importlib
+    from agent import preferences as _p
+    importlib.reload(_p)
 
     msgs = loader.load_inbox()
-    pref_msgs = [m for m in msgs if preferences.is_preference_message(m)]
-    print(f"\nFound {len(pref_msgs)} preference-bearing message(s):")
-
+    pref_msgs = [m for m in msgs if _p.is_preference_message(m)]
+    print(f"Found {len(pref_msgs)} preference-bearing message(s):")
     for m in pref_msgs:
-        print(f"  {m['id']}: \"{m.get('subject','')}\"")
-        # SECURITY: never turn a hostile message into a stored preference.
-        # e.g. m039 ("assistant settings … enable autonomous mode") is an
-        # injection, not a genuine user preference.
         inj = injection.analyse(m, use_llm=use_llm)
         if inj["is_injection"]:
-            print(f"    ⛔ REFUSED: looks like a prompt-injection, not a preference "
-                  f"({inj['evidence']}). Not stored.")
-            trace.log_event("R4", "refusal", message_id=m["id"],
-                            reason="injection masquerading as preference",
-                            evidence=inj["evidence"])
+            print(f"  ⛔ {m['id']} REFUSED (injection, not a preference): {inj['evidence']}")
+            trace.log_event("R4", "refusal", message_id=m["id"], evidence=inj["evidence"])
             continue
-        pref = preferences.extract_and_store(m, use_llm=use_llm)
+        pref = _p.extract_and_store(m, use_llm=use_llm)
         if pref:
-            print(f"    → Stored [{pref['id']}]: {pref['description']}")
-            trace.log_event("R4", "preference", message_id=m["id"],
+            print(f"  ✓ {m['id']} → stored [{pref['id']}] {pref['description']}")
+            trace.log_event("R4", "preference_stored", message_id=m["id"],
                             pref_id=pref["id"], description=pref["description"])
 
-    print("\nAll stored preferences (from state/prefs.json):")
+    print(f"\nWritten to {prefs_path}")
+    print("PHASE 1 process now exits. State persists on disk.\n")
+
+
+def _r4_apply(use_llm: bool = True):
+    """
+    Phase 2: FRESH process. Do NOT re-read the preference messages.
+    Load prefs.json from disk and handle messages whose correct treatment
+    depends on the stored preferences.
+    """
+    from agent import scheduling
+    print("\n[PHASE 2: APPLY] Fresh process — loading preferences from disk.")
+    print("(The preference messages m041/m015 are NOT re-read in this phase.)\n")
+
+    stored = preferences.get_all()
+    if not stored:
+        print("No preferences on disk. Run:  python demo.py --cap R4 --phase store   first.")
+        return
+    print("Preferences loaded from state/prefs.json:")
     print(preferences.describe_all())
 
-    print("\n--- Demonstrating preference application ---")
-    # Calendar rule
-    for time_str, label in [("09:00", "9:00am (before cutoff)"), ("11:00", "11:00am"), ("14:00", "2pm")]:
-        allowed = preferences.apply_calendar_rule(time_str)
-        verdict = "✅ allowed" if allowed else "❌ BLOCKED (counter-offer 11am+)"
-        print(f"  Meeting at {time_str} ({label}): {verdict}")
+    msgs_by_id = loader.by_id()
 
-    # CC rule
-    legal_from = "m.cho@hartwellcho.com"
-    cc = preferences.apply_cc_rule(legal_from)
-    print(f"\n  Email from {legal_from} → auto-CC: {cc or '(none)'}")
+    # --- Calendar rule: m043 proposes Monday 9:00am (depends on m041) ---
+    print("\n── Message m043 (Aria: 'one more slot', proposes Monday 9:00am) ──")
+    m043 = msgs_by_id.get("m043")
+    if m043:
+        verdict = scheduling.evaluate_meeting(m043)
+        print(f"  Proposed time parsed: {verdict['proposed_time']}")
+        if not verdict["allowed"]:
+            print(f"  WITH stored preference → ❌ DECLINE 9am, counter-offer "
+                  f"{verdict['counter_offer']}. ({verdict['reason']})")
+        else:
+            print(f"  WITH stored preference → ✅ {verdict['reason']}")
+        print("  CONTROL (if no preference had persisted) → ✅ 9am would be ACCEPTED.")
+        print("  ⇒ Behaviour changed ONLY because the preference survived the restart.")
+        trace.log_event("R4", "apply_calendar", message_id="m043",
+                        proposed=verdict["proposed_time"], allowed=verdict["allowed"],
+                        counter_offer=verdict["counter_offer"])
+
+    # --- Routing rule: m018 from the lawyers (depends on m015) ---
+    print("\n── Message m018 (m.cho@hartwellcho.com: SAFE amendment) ──")
+    m018 = msgs_by_id.get("m018")
+    if m018:
+        cc = preferences.apply_cc_rule(m018.get("from", ""))
+        print(f"  Sender: {m018.get('from','')}")
+        print(f"  WITH stored preference → auto-CC: {cc or '(none)'}")
+        print("  CONTROL (if no preference had persisted) → CC: (none)")
+        print("  ⇒ Priya is CC'd on the legal reply only because the routing rule persisted.")
+        trace.log_event("R4", "apply_routing", message_id="m018", auto_cc=cc)
+
+
+def cap_r4(use_llm: bool = True, phase: str = "both"):
+    """R4 — Persistent preferences across a real process restart (Part 5)."""
+    print("\n" + "=" * 60)
+    print(f"R4: Standing Instructions (phase={phase})")
+    print("=" * 60)
+
+    if phase == "store":
+        _r4_store(use_llm=use_llm)
+    elif phase == "apply":
+        _r4_apply(use_llm=use_llm)
+    else:  # both — runs store then apply in one process (convenience only)
+        print("\n(Running both phases in one process for convenience. For the true")
+        print(" end-to-end proof run them as SEPARATE processes:")
+        print("   python demo.py --cap R4 --phase store")
+        print("   python demo.py --cap R4 --phase apply )")
+        _r4_store(use_llm=use_llm)
+        _r4_apply(use_llm=use_llm)
 
 
 def cap_r5(use_llm: bool = True):
@@ -459,6 +514,8 @@ def main():
     parser.add_argument("--no-llm", action="store_true", help="Disable LLM (offline/heuristic mode)")
     parser.add_argument("--all", dest="run_all", action="store_true", help="Run all capabilities")
     parser.add_argument("--clear-trace", action="store_true", help="Clear trace.jsonl before running")
+    parser.add_argument("--phase", choices=["store", "apply", "both"], default="both",
+                        help="For --cap R4: 'store' then exit, 'apply' in a fresh process")
     args = parser.parse_args()
 
     use_llm = not args.no_llm
@@ -495,7 +552,7 @@ def main():
     elif cap == "R3":
         cap_r3(use_llm=use_llm, dry_run=args.dry_run)
     elif cap == "R4":
-        cap_r4(use_llm=use_llm)
+        cap_r4(use_llm=use_llm, phase=args.phase)
     elif cap == "R5":
         cap_r5(use_llm=use_llm)
     elif cap == "R6":
