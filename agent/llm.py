@@ -1,12 +1,19 @@
 """
 LLM abstraction with rate-limiting, retry on HTTP 429, and configurable delay.
 
-Supports:
-  - Google Gemini (via google-generativeai) — set GEMINI_API_KEY
-  - OpenAI-compatible endpoints           — set OPENAI_API_KEY + OPENAI_BASE_URL
-  - Offline / heuristic-only mode         — set LLM_OFFLINE=1
+═══════════════════════════════════════════════════════════════════════════════
+  ►►► CHANGE THE MODEL HERE — this block is the single source of truth. ◄◄◄
+═══════════════════════════════════════════════════════════════════════════════
+Set PROVIDER and MODEL below (or override with env vars LLM_PROVIDER / LLM_MODEL
+without editing code). Everything else in the codebase calls llm.call() and never
+names a model, so this is the only place a model is chosen.
 
-Call order: env var GEMINI_API_KEY → OPENAI_API_KEY → offline fallback.
+  PROVIDER options:
+    "ollama"  — local model via Ollama       (needs `ollama serve`, a pulled model)
+    "gemini"  — Google Gemini                 (needs GEMINI_API_KEY)
+    "openai"  — any OpenAI-compatible endpoint (needs OPENAI_API_KEY [+ OPENAI_BASE_URL])
+    "offline" — no model, deterministic stubs (also via --no-llm / LLM_OFFLINE=1)
+    "auto"    — pick the first provider whose credentials are present, else offline
 """
 
 import os
@@ -18,9 +25,52 @@ from typing import Optional
 
 log = logging.getLogger("agent.llm")
 
+# ─────────────────────────── MODEL CONFIG (edit here) ───────────────────────
+PROVIDER = os.environ.get("LLM_PROVIDER", "auto")     # ollama|gemini|openai|offline|auto
+MODEL    = os.environ.get("LLM_MODEL", "")            # blank → use provider default below
+
+DEFAULT_MODEL = {
+    "ollama": "qwen2.5:1.5b",
+    "gemini": "gemini-1.5-flash",
+    "openai": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Seconds to sleep between every LLM call (keeps free-tier under the RPM cap)
 CALL_DELAY = float(os.environ.get("LLM_CALL_DELAY", "2"))
 MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "5"))
+
+
+def _resolve_provider() -> str:
+    """Return the effective provider, honouring LLM_OFFLINE and 'auto' detection."""
+    if os.environ.get("LLM_OFFLINE", "0") == "1":
+        return "offline"
+    if PROVIDER != "auto":
+        return PROVIDER
+    # auto: first available wins
+    if os.environ.get("OLLAMA_MODEL"):
+        return "ollama"
+    if os.environ.get("GEMINI_API_KEY"):
+        return "gemini"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    return "offline"
+
+
+def _resolve_model(provider: str) -> str:
+    """Model name for a provider: explicit MODEL/LLM_MODEL wins, else the default."""
+    if MODEL:
+        return MODEL
+    # Back-compat: OLLAMA_MODEL still selects the ollama model when set
+    if provider == "ollama" and os.environ.get("OLLAMA_MODEL"):
+        return os.environ["OLLAMA_MODEL"]
+    return DEFAULT_MODEL.get(provider, "")
+
+
+def active_config() -> dict:
+    """Report the resolved provider + model (for --cap output / debugging)."""
+    p = _resolve_provider()
+    return {"provider": p, "model": _resolve_model(p) if p != "offline" else "(offline stub)"}
 
 # Global counter of real model calls made this run (offline stubs are NOT counted).
 # Used by Part 2 to report how many messages never required a model call.
@@ -168,23 +218,23 @@ def _ollama_call(prompt: str, model: str) -> str:
 def call(prompt: str, model: Optional[str] = None) -> str:
     """
     Call the configured LLM. Returns the text response.
-    Selection order: LLM_OFFLINE → OLLAMA_MODEL → GEMINI_API_KEY → OPENAI_API_KEY → stub.
-    Falls back to a clearly-labelled stub if LLM_OFFLINE=1 or nothing is configured.
+    Provider + model are resolved from the single MODEL CONFIG block at the top
+    of this file (or LLM_PROVIDER / LLM_MODEL env overrides). No other module
+    names a model.
     """
-    offline = os.environ.get("LLM_OFFLINE", "0") == "1"
-    if offline:
+    provider = _resolve_provider()
+    chosen = model or _resolve_model(provider)
+
+    if provider == "offline":
         return _offline_stub(prompt)
+    if provider == "ollama":
+        return _ollama_call(prompt, model=chosen)
+    if provider == "gemini":
+        return _gemini_call(prompt, model=chosen)
+    if provider == "openai":
+        return _openai_call(prompt, model=chosen)
 
-    if os.environ.get("OLLAMA_MODEL"):
-        return _ollama_call(prompt, model=model or os.environ["OLLAMA_MODEL"])
-
-    if os.environ.get("GEMINI_API_KEY"):
-        return _gemini_call(prompt, model=model or "gemini-1.5-flash")
-
-    if os.environ.get("OPENAI_API_KEY"):
-        return _openai_call(prompt, model=model)
-
-    log.warning("No LLM configured. Using offline stub.")
+    log.warning("Unknown provider %r — using offline stub.", provider)
     return _offline_stub(prompt)
 
 

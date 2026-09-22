@@ -669,11 +669,14 @@ def main():
         trace.clear()
         log.info("Trace cleared.")
 
-    # Print inbox stats
+    # Print inbox stats + the active model (single source of truth: agent/llm.py)
     stats = loader.stats()
+    from agent import llm as _llm
+    cfg = _llm.active_config()
     print(f"\n📬 Inbox: {stats['total_messages']} messages | {stats['unread_messages']} unread | "
           f"{stats['total_threads']} threads | Owner: {stats['owner']}")
     print(f"   Date range: {stats['date_range']}")
+    print(f"   Model: provider={cfg['provider']} model={cfg['model']}")
 
     if args.run_all or not args.cap:
         # Full run

@@ -22,15 +22,24 @@ pip install -r requirements.txt
 # Set your API key (Gemini recommended)
 export GEMINI_API_KEY=your_key_here
 
-# Or use a local model via the native Ollama backend (no extra Python deps)
-ollama serve &                    # start the local server
-export OLLAMA_MODEL=qwen2.5:1.5b  # or any pulled model; uses stdlib urllib
-export LLM_CALL_DELAY=0           # local model — no rate limit needed
+# ── Choosing a model — ONE place ─────────────────────────────
+# The single source of truth is the MODEL CONFIG block at the top of agent/llm.py.
+# Change it there, OR override without editing code via two env vars:
+#   LLM_PROVIDER = ollama | gemini | openai | offline | auto
+#   LLM_MODEL    = <model name>   (blank = provider default)
+# The startup banner prints the resolved "provider=… model=…".
 
-# Or an OpenAI-compatible endpoint (requires: pip install openai)
-export OPENAI_API_KEY=ollama
-export OPENAI_BASE_URL=http://localhost:11434/v1
-export OPENAI_MODEL=llama3.1:8b
+# Local model via native Ollama backend (no extra Python deps):
+ollama serve &
+export LLM_PROVIDER=ollama
+export LLM_MODEL=qwen2.5:1.5b     # or llama3.1:latest, qwen3:4b, gemma3:4b …
+export LLM_CALL_DELAY=0           # local — no rate limit needed
+
+# Google Gemini:
+export LLM_PROVIDER=gemini LLM_MODEL=gemini-1.5-flash GEMINI_API_KEY=...
+
+# Any OpenAI-compatible endpoint (requires: pip install openai):
+export LLM_PROVIDER=openai LLM_MODEL=gpt-4o-mini OPENAI_API_KEY=... OPENAI_BASE_URL=...
 
 # Or run completely offline (heuristics only)
 export LLM_OFFLINE=1
