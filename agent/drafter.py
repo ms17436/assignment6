@@ -27,7 +27,10 @@ from . import llm, loader, preferences, retrieval
 
 log = logging.getLogger("agent.drafter")
 
-OUTBOX_DIR = Path(__file__).parent.parent / "outbox"
+# Drafts are REVERSIBLE previews and must NOT go into outbox/ (writing to
+# outbox/ == sending, which is irreversible and gate-controlled). Drafts live in
+# their own directory so the invariant "only gate.send() writes to outbox/" holds.
+DRAFTS_DIR = Path(__file__).parent.parent / "drafts"
 
 _DRAFT_PROMPT = """\
 You are a professional AI assistant drafting a reply on behalf of Sam (sam@paperjet.io),
@@ -255,13 +258,16 @@ def _offline_draft(msg: dict, cc: list, read_ids: list,
     mid = msg["id"]
     grounding = retrieval.verify_citations(read_ids, read_ids)  # trivially all-verified
 
-    if not context_msgs:
-        # Nothing to ground on → draft nothing (req #4)
+    # Only refuse when the message REQUIRES earlier information that we could not
+    # find. A message that simply starts a new thread (m013, m010) is
+    # self-contained and answerable without prior context.
+    needs_prior = retrieval.refers_to_earlier(msg)
+    if not context_msgs and needs_prior:
         return {
             "reply_to_id": mid,
             "mode": "not_in_inbox",
             "answerable": False,
-            "missing": "No earlier message (thread-walk or keyword search) contained the needed information.",
+            "missing": "This message refers back to an earlier message, but no such message was found in the inbox.",
             "to": None, "cc": [], "subject": None, "body": None,
             "cited_ids": [],
             "needs_approval": False,
@@ -271,6 +277,12 @@ def _offline_draft(msg: dict, cc: list, read_ids: list,
             "drafted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
 
+    if read_ids:
+        body = ("[DRAFT UNAVAILABLE — LLM not configured. Compose manually. "
+                f"Grounding is available in these earlier messages: {read_ids}.]")
+    else:
+        body = ("[DRAFT UNAVAILABLE — LLM not configured. Compose manually. "
+                "This is a self-contained request needing no prior context.]")
     return {
         "reply_to_id": mid,
         "mode": "grounded_reply",
@@ -279,8 +291,7 @@ def _offline_draft(msg: dict, cc: list, read_ids: list,
         "to": msg.get("from", ""),
         "cc": cc,
         "subject": "Re: " + msg.get("subject", ""),
-        "body": ("[DRAFT UNAVAILABLE — LLM not configured. Compose manually. "
-                 f"Grounding is available in these earlier messages: {read_ids}.]"),
+        "body": body,
         "cited_ids": grounding["verified"],
         "needs_approval": True,
         "approval_reason": "LLM offline — manual review required.",
@@ -290,19 +301,24 @@ def _offline_draft(msg: dict, cc: list, read_ids: list,
     }
 
 
-def write_to_outbox(draft_dict: dict, dry_run: bool = False) -> Path:
+def save_draft(draft_dict: dict, dry_run: bool = False) -> Path:
     """
-    Write a draft to outbox/<id>.json.
-    In dry-run mode, prints what would be written but does not write.
+    Save a REVERSIBLE draft preview to drafts/<id>.json (NOT outbox/).
+    This never counts as sending. In dry-run mode, prints instead of writing.
     """
     mid = draft_dict.get("reply_to_id", "unknown")
-    outfile = OUTBOX_DIR / f"draft_{mid}_{int(time.time())}.json"
+    outfile = DRAFTS_DIR / f"draft_{mid}.json"
     if dry_run:
-        print(f"[DRY-RUN] Would write draft to {outfile}:")
+        print(f"[DRY-RUN] Would save draft to {outfile}:")
         print(json.dumps(draft_dict, indent=2))
         return outfile
-    OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
+    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     with open(outfile, "w") as fh:
         json.dump(draft_dict, fh, indent=2)
-    log.info("Draft written to %s", outfile)
+    log.info("Draft saved to %s", outfile)
     return outfile
+
+
+# Backwards-compatible alias (old name pointed at outbox/, now redirected to drafts/)
+def write_to_outbox(draft_dict: dict, dry_run: bool = False) -> Path:
+    return save_draft(draft_dict, dry_run=dry_run)

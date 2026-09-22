@@ -33,8 +33,10 @@
     },
     "retrieval": "PRIMARY: thread-walk via thread_id (retrieval.thread_walk). FALLBACK: cross-thread keyword/sender search (retrieval.keyword_search) used when the thread is thin or the message refers back to an earlier one. Hostile messages (injection/phishing) are filtered out of grounding context. Citations are verified against the mail store AND the retrieved set by retrieval.verify_citations; unverifiable citations are dropped and 'not in inbox' yields no draft.",
     "irreversible": ["send", "delete"],
-    "reversible": ["draft", "archive", "defer", "delegate"],
-    "gate": "agent/gate.py — gate.send() and gate.delete() are the only code paths that write to outbox/",
+    "reversible": ["draft", "label", "archive", "defer", "delegate"],
+    "delete_is_irreversible_because": "The mock store has no trash/recycle bin, so a deleted message cannot be recovered. It is therefore gated exactly like send.",
+    "send_is_irreversible_because": "Writing to outbox/ is the mock definition of 'sent'; a sent message cannot be unsent.",
+    "gate": "agent/gate.py — gate.send() and gate.delete() are the ONLY code paths that write to outbox/. Drafts are reversible and written to drafts/, never outbox/. Both a per-action y/N prompt and a --dry-run mode are provided; AUTO_APPROVE=1 for non-interactive tests. gate.audit_outbox() verifies the invariant.",
     "preference_demo": "m041: no meetings before 11:00am | m015: CC priya@paperjet.io on Hartwell & Cho mail",
     "injection_messages": ["m017", "m024", "m039", "m047"],
     "phishing_messages": ["m021", "m023", "m045"],
@@ -66,10 +68,10 @@
       "id": "R3",
       "name": "Gate the irreversible",
       "tier": "C",
-      "claim": "Never writes to outbox/ without either per-action y/n approval or an explicit --dry-run that prints but does not write.",
-      "command": "python demo.py --cap R3 --dry-run",
-      "observable": "Prints every send it WOULD perform with '[DRY-RUN]' prefix, then 'outbox/ writes: 0'. Re-running without --dry-run prompts y/n before each send. AUTO_APPROVE=1 enables automated testing without prompts.",
-      "evidence": "state/trace.jsonl — cap=R3: 'gate' events with decision=dry_run_skipped | approved | rejected. outbox/ contains zero sent_*.json files after dry-run."
+      "claim": "Gates every irreversible action (send + delete). Provides BOTH a per-action y/N approval prompt AND a --dry-run mode. Writing to outbox/ happens ONLY via gate.send(), one file per message (outbox/sent_<id>.json), nowhere else. Every gated decision is logged with proposal, human decision, and outcome.",
+      "command": "python demo.py --cap R3 --dry-run   (or AUTO_APPROVE=1 python demo.py --cap R3)",
+      "observable": "Prints a reversible/irreversible action table. --dry-run: shows each proposed SEND/DELETE with '[DRY-RUN]', ends 'outbox/ writes this run: 0', invariant ok. AUTO_APPROVE=1: writes one sent_<id>.json per approved reply plus a deleted_<id>.json tombstone, audit shows no unexpected files. Answering 'n' to prompts writes nothing.",
+      "evidence": "state/trace.jsonl — cap=R3: one consolidated 'gate' event per action with fields proposed{to,subject,cited_ids,body_len}, human_decision (dry_run|approved|rejected), outcome (sent|deleted|not_performed), outfile. gate.audit_outbox() confirms outbox/ holds only gate-written files."
     },
     {
       "id": "R4",

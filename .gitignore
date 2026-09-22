@@ -22,5 +22,8 @@ state/trace.jsonl
 # Outbox messages (may contain sensitive info)
 outbox/
 
+# Draft previews (reversible, regenerated each run)
+drafts/
+
 # macOS
 .DS_Store

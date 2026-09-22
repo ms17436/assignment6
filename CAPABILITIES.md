@@ -73,10 +73,14 @@ can cause those effects, which is also the prompt-injection defence.
   retrieved set; unverifiable citations are dropped, and if nothing grounds the
   answer the system drafts nothing.
 
-- **Reversible vs irreversible.** `send` and `delete` are irreversible and
-  always pass through `gate.require_approval()`. `draft`, `archive`, `defer`,
-  `delegate` are reversible and run without a prompt. In `--dry-run` mode no
-  outbox writes occur at all.
+- **Reversible vs irreversible (Part 4 #1).**
+  Reversible (no gate): `draft`, `label`, `archive`, `defer`, `delegate` — each
+  can be edited or undone in place. Irreversible (gated): `send`, `delete`.
+  `send` is irreversible because writing to `outbox/` is the mock definition of
+  "sent" and a sent message cannot be unsent. **`delete` is treated as
+  irreversible by design** because the mock store has no trash/recycle bin — a
+  deleted message cannot be recovered — so it is gated exactly like `send`.
+  In `--dry-run` mode no `outbox/` writes occur at all.
 
 - **Where the gate sits.** Only `gate.send()` and `gate.delete()` can write to
   `outbox/` or modify stored state in an irreversible way. All other code —
@@ -121,6 +125,31 @@ Each decision carries a `handled_by` tag (`rule:noise`, `rule:injection`,
 `rule:phishing`, `rule:preference`, `rule:sent`, or `llm`) which is written to
 `state/trace.jsonl`. The 67 rule-routed messages never touch the model even when
 an API key is configured; `Actual LLM calls` is a live counter (0 in `--no-llm`).
+
+## Gating irreversible actions (Part 4)
+
+`python demo.py --cap R3 [--dry-run]` demonstrates the gate.
+
+- **Both controls provided** (req #2): a per-action interactive `y/N` prompt AND a
+  `--dry-run` mode that shows exactly what it would do and writes nothing.
+  `AUTO_APPROVE=1` is available for non-interactive testing.
+- **One file per message, nowhere else** (req #3): `gate.send()` is the ONLY code
+  path that writes to `outbox/`, as `outbox/sent_<message_id>.json` (deterministic
+  — one file per message). Drafts are reversible previews and go to `drafts/`, not
+  `outbox/`. `gate.audit_outbox()` verifies the invariant and reports any
+  unexpected files.
+- **Every gated decision logged** (req #4): one consolidated record per action in
+  `state/trace.jsonl` with `proposed` (to/subject/cited_ids/body_len), the
+  `human_decision` (`dry_run` | `approved` | `rejected`), and the `outcome`
+  (`sent` | `deleted` | `not_performed`) plus `outfile`.
+
+Observed:
+
+| run | outbox writes | invariant |
+|---|---|---|
+| `--dry-run` | 0 | ok (nothing written) |
+| `AUTO_APPROVE=1` (yes to all) | 4 `sent_*` + 1 `deleted_*`, one per message | ok (only gate-written files) |
+| answer "n" to all prompts | 0 | ok; trace shows `rejected` / `not_performed` |
 
 ## Grounded answering (Part 3)
 

@@ -43,38 +43,35 @@ def require_approval(
     description: str,
     payload: dict,
     dry_run: bool = False,
-) -> bool:
+) -> str:
     """
-    Present the proposed action to the user and get approval.
+    Present the proposed action to the user and return the DECISION as a string:
+      "dry_run"  — dry-run mode: shown, not performed
+      "approved" — human said yes (or AUTO_APPROVE=1)
+      "rejected" — human said no
 
-    Returns True if approved, False if rejected.
-    In dry_run mode always returns False (no effect, no prompt).
+    This function only decides. The caller performs the effect and writes the
+    consolidated trace record, so every gated decision is logged exactly once
+    with proposal + decision + outcome (Part 4 req #4).
     """
-    event_base = {
-        "cap": "R3",
-        "type": "gate",
-        "action": action,
-        "description": description,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    }
-
     if dry_run:
         print(f"\n[DRY-RUN] Would {action.upper()}: {description}")
         if action == "send":
             print(f"  To:      {payload.get('to', '')}")
-            print(f"  CC:      {', '.join(payload.get('cc', []))}")
+            cc = payload.get("cc", [])
+            if cc:
+                print(f"  CC:      {', '.join(cc)}")
             print(f"  Subject: {payload.get('subject', '')}")
-            print(f"  Body snippet: {payload.get('body', '')[:200]}...")
-        _append_trace({**event_base, "decision": "dry_run_skipped"})
-        return False
+            body = payload.get("body") or ""
+            print(f"  Body snippet: {body[:200]}{'...' if len(body) > 200 else ''}")
+        elif action == "delete":
+            print(f"  Message: {payload.get('id','')} — {payload.get('subject','')}")
+        return "dry_run"
 
-    # Auto-approve mode (tests only)
     if os.environ.get("AUTO_APPROVE") == "1":
-        log.warning("AUTO_APPROVE=1 — auto-approving %s. Do not use in production.", action)
-        _append_trace({**event_base, "decision": "auto_approved"})
-        return True
+        log.warning("AUTO_APPROVE=1 — auto-approving %s. Testing only.", action)
+        return "approved"
 
-    # Interactive prompt
     print(f"\n{'='*60}")
     print(f"APPROVAL REQUIRED: {action.upper()}")
     print(f"{'='*60}")
@@ -96,73 +93,109 @@ def require_approval(
     while True:
         ans = input("\nApprove? [y/N] ").strip().lower()
         if ans in ("y", "yes"):
-            _append_trace({**event_base, "decision": "approved"})
             log.info("GATE: %s approved by user.", action)
-            return True
+            return "approved"
         if ans in ("n", "no", ""):
-            _append_trace({**event_base, "decision": "rejected"})
             log.info("GATE: %s rejected by user.", action)
-            return False
+            return "rejected"
         print("Please enter 'y' or 'n'.")
+
+
+def _log_gate(action: str, proposed: dict, decision: str, outcome: str,
+              outfile: Optional[str] = None):
+    """Write ONE consolidated record: what was proposed, decided, and what happened."""
+    _append_trace({
+        "cap": "R3",
+        "type": "gate",
+        "action": action,
+        "proposed": proposed,
+        "human_decision": decision,   # dry_run | approved | rejected
+        "outcome": outcome,           # sent | deleted | not_performed
+        "outfile": outfile,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
 
 
 def send(draft: dict, dry_run: bool = False) -> bool:
     """
-    Gate + send (write to outbox/).
-    Returns True if the message was actually written to outbox.
+    Gate + send. Writing to outbox/ IS sending; this is the ONLY function that
+    does it. One file per message: outbox/sent_<message_id>.json.
+    Returns True iff the message was actually written to outbox.
     """
-    approved = require_approval(
+    mid = draft.get("reply_to_id", "unknown")
+    proposed = {
+        "to": draft.get("to", ""),
+        "cc": draft.get("cc", []),
+        "subject": draft.get("subject", ""),
+        "reply_to_id": mid,
+        "cited_ids": draft.get("cited_ids", []),
+        "body_len": len(draft.get("body") or ""),
+    }
+
+    decision = require_approval(
         action="send",
         description=f"Send reply to {draft.get('to','')} re: {draft.get('subject','')}",
         payload=draft,
         dry_run=dry_run,
     )
-    if not approved:
+
+    if decision != "approved":
+        _log_gate("send", proposed, decision, outcome="not_performed")
         return False
 
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
-    mid = draft.get("reply_to_id", "unknown")
-    outfile = OUTBOX_DIR / f"sent_{mid}_{int(time.time())}.json"
+    outfile = OUTBOX_DIR / f"sent_{mid}.json"   # deterministic: one file per message
     with open(outfile, "w") as fh:
         json.dump({**draft, "sent_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, fh, indent=2)
-    _append_trace({
-        "cap": "R3",
-        "type": "gate",
-        "action": "send",
-        "decision": "sent",
-        "outfile": str(outfile),
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    })
+    _log_gate("send", proposed, decision, outcome="sent", outfile=str(outfile))
     print(f"[SENT] Written to {outfile}")
     return True
 
 
 def delete(msg: dict, dry_run: bool = False) -> bool:
     """
-    Gate + delete (marks message as deleted in decisions.json).
-    We have no actual store to delete from, so this writes a tombstone.
-    Returns True if approved.
+    Gate + delete. Irreversible in this design (see manifest): the mock store has
+    no trash, so a delete cannot be undone. Writes a tombstone to outbox/.
+    Returns True iff the delete was performed.
     """
-    approved = require_approval(
+    proposed = {"id": msg.get("id", ""), "subject": msg.get("subject", "")}
+
+    decision = require_approval(
         action="delete",
-        description=f"Delete message {msg['id']}: {msg.get('subject','')}",
+        description=f"Delete message {msg.get('id','')}: {msg.get('subject','')}",
         payload=msg,
         dry_run=dry_run,
     )
-    if not approved:
+
+    if decision != "approved":
+        _log_gate("delete", proposed, decision, outcome="not_performed")
         return False
 
-    tombstone = OUTBOX_DIR / f"deleted_{msg['id']}.json"
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
+    tombstone = OUTBOX_DIR / f"deleted_{msg['id']}.json"
     with open(tombstone, "w") as fh:
         json.dump({"deleted_id": msg["id"], "deleted_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, fh)
-    _append_trace({
-        "cap": "R3",
-        "type": "gate",
-        "action": "delete",
-        "decision": "deleted",
-        "message_id": msg["id"],
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    })
+    _log_gate("delete", proposed, decision, outcome="deleted", outfile=str(tombstone))
     print(f"[DELETED] Tombstone written for {msg['id']}")
     return True
+
+
+def audit_outbox() -> dict:
+    """
+    Verify the outbox invariant: it may contain ONLY files this gate wrote
+    (sent_*.json / deleted_*.json), and at most one sent file per message.
+    Returns a report dict.
+    """
+    if not OUTBOX_DIR.exists():
+        return {"ok": True, "sent": [], "deleted": [], "unexpected": []}
+    sent, deleted, unexpected = [], [], []
+    for f in sorted(OUTBOX_DIR.iterdir()):
+        if f.name.startswith("sent_") and f.suffix == ".json":
+            sent.append(f.name)
+        elif f.name.startswith("deleted_") and f.suffix == ".json":
+            deleted.append(f.name)
+        elif f.name == ".gitkeep":
+            continue
+        else:
+            unexpected.append(f.name)
+    return {"ok": not unexpected, "sent": sent, "deleted": deleted, "unexpected": unexpected}

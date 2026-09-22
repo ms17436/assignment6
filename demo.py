@@ -213,33 +213,65 @@ def cap_r2(msg_id: str, use_llm: bool = True, dry_run: bool = False):
     return draft
 
 
+REVERSIBLE_ACTIONS = ["draft", "label", "archive", "defer", "delegate"]
+IRREVERSIBLE_ACTIONS = ["send", "delete"]
+
+# Messages that clearly warrant a reply — used to demonstrate the gate even in
+# offline mode, where the classifier cannot label things 'reply'.
+_R3_DEMO_REPLIES = ["m008", "m013", "m016", "m010"]
+
+
 def cap_r3(use_llm: bool = True, dry_run: bool = False):
-    """R3 — Gate the irreversible: show all sends/deletes, require approval."""
+    """R4 — Gate the irreversible: exercise send + delete gates, audit outbox."""
     print("\n" + "=" * 60)
     print("R3: Gate the Irreversible")
     print("=" * 60)
 
-    if dry_run:
-        print("[DRY-RUN MODE] No messages will be sent or deleted.\n")
+    # --- Action reversibility table (Part 4 req #1) ---
+    print("\nAction classification:")
+    print(f"  Reversible   (no gate): {', '.join(REVERSIBLE_ACTIONS)}")
+    print(f"  Irreversible (gated):   {', '.join(IRREVERSIBLE_ACTIONS)}")
+    print("  delete is treated as IRREVERSIBLE: the mock store has no trash, so a")
+    print("  deleted message cannot be recovered.\n")
 
-    # Get or compute decisions
+    if dry_run:
+        print("[DRY-RUN MODE] Nothing will be written to outbox/.\n")
+
+    msgs_by_id = loader.by_id()
     decisions = _load_decisions() or classifier.classify_all(loader.load_inbox(), use_llm=use_llm)
 
-    reply_msgs = [d for d in decisions if d.get("disposition") == "reply"]
-    print(f"Messages that would require a send: {len(reply_msgs)}")
+    # Reply candidates: those classified 'reply', or the demo set if none (offline)
+    reply_ids = [d["id"] for d in decisions if d.get("disposition") == "reply"]
+    if not reply_ids:
+        reply_ids = [mid for mid in _R3_DEMO_REPLIES if mid in msgs_by_id]
+        print(f"(No 'reply' dispositions — using demo set to exercise the gate: {reply_ids})")
 
-    for d in reply_msgs:
-        mid = d["id"]
-        msgs_by_id = loader.by_id()
+    print(f"\nSend actions to gate: {len(reply_ids)}")
+    for mid in reply_ids:
         msg = msgs_by_id.get(mid)
         if not msg:
             continue
         draft = drafter.draft(msg, use_llm=use_llm)
+        # Skip messages the drafter refused to answer (not-in-inbox)
+        if draft.get("mode") == "not_in_inbox":
+            print(f"  {mid}: nothing to send (not answerable from inbox).")
+            continue
         gate.send(draft, dry_run=dry_run)
-        trace.log_event("R3", "gate", action="send", message_id=mid, dry_run=dry_run)
 
-    outbox = list(Path("outbox").glob("sent_*.json"))
-    print(f"\noutbox/ writes: {len(outbox) if not dry_run else 0}")
+    # --- Demonstrate the delete gate too (on a noise message) ---
+    print("\nDelete action to gate (demonstration):")
+    noise = next((d for d in decisions if d.get("handled_by") == "rule:noise"), None)
+    if noise:
+        gate.delete(msgs_by_id[noise["id"]], dry_run=dry_run)
+
+    # --- Audit the outbox invariant (Part 4 req #3) ---
+    audit = gate.audit_outbox()
+    print("\n── Outbox audit ────────────────────────")
+    print(f"  sent files:       {audit['sent']}")
+    print(f"  deleted files:    {audit['deleted']}")
+    print(f"  unexpected files: {audit['unexpected']}")
+    print(f"  invariant ok (only gate-written files): {audit['ok']}")
+    print(f"\noutbox/ writes this run: {0 if dry_run else len(audit['sent']) + len(audit['deleted'])}")
     return decisions
 
 
