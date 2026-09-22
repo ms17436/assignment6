@@ -52,6 +52,7 @@ def build(decisions: list[dict]) -> dict:
         "auto_archived_count": len(auto_archived),
         "auto_archived_sample": auto_archived[:5],
         "flagged_count": len(flagged),
+        "flagged_items": flagged,
     }
 
 
@@ -102,7 +103,12 @@ def print_digest(digest: dict, msgs_by_id: dict):
     print()
 
     if digest["flagged_count"]:
-        print(f"── ⚠️  FLAGGED: {digest['flagged_count']} suspicious message(s) ──────────────")
-        print("  Run --cap R5 for full injection/phishing report.\n")
+        print(f"── ⚠️  FLAGGED / SECURITY: {digest['flagged_count']} message(s) ──────────────")
+        for item in digest.get("flagged_items", []):
+            mid = item["id"]
+            disp = item.get("disposition", "")
+            tag = "INJECTION" if disp == "flag_injection" else "PHISHING/ESCALATE"
+            print(f"  [{tag}] {mid}: {item.get('reason','')[:80]}")
+        print("  (None acted on. Injections left in place. Run --cap R5 for detail.)\n")
 
     print(bar)

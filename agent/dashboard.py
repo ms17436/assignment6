@@ -47,7 +47,7 @@ def build(decisions: list[dict], flagged_injections: list[dict],
         flagged_items.append({
             "category": "prompt_injection",
             "message_id": inj["message_id"],
-            "description": inj["evidence"],
+            "description": f"Attempted to {inj.get('attempted_action','act')}. {inj['evidence']}",
             "action": inj["action"],
         })
     # Phishing from decisions
