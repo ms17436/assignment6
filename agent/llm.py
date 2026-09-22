@@ -22,6 +22,20 @@ log = logging.getLogger("agent.llm")
 CALL_DELAY = float(os.environ.get("LLM_CALL_DELAY", "2"))
 MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "5"))
 
+# Global counter of real model calls made this run (offline stubs are NOT counted).
+# Used by Part 2 to report how many messages never required a model call.
+_CALL_COUNT = 0
+
+
+def call_count() -> int:
+    """Return the number of real (non-stub) LLM calls made this run."""
+    return _CALL_COUNT
+
+
+def reset_call_count():
+    global _CALL_COUNT
+    _CALL_COUNT = 0
+
 
 def _sleep_delay():
     if CALL_DELAY > 0:
@@ -31,6 +45,7 @@ def _sleep_delay():
 def _gemini_call(prompt: str, model: str = "gemini-1.5-flash") -> str:
     import google.generativeai as genai  # type: ignore
 
+    global _CALL_COUNT
     api_key = os.environ.get("GEMINI_API_KEY", "")
     genai.configure(api_key=api_key)
     gen_model = genai.GenerativeModel(model)
@@ -39,6 +54,7 @@ def _gemini_call(prompt: str, model: str = "gemini-1.5-flash") -> str:
         try:
             _sleep_delay()
             resp = gen_model.generate_content(prompt)
+            _CALL_COUNT += 1
             return resp.text.strip()
         except Exception as e:
             err_str = str(e)
@@ -60,6 +76,7 @@ def _openai_call(prompt: str, model: Optional[str] = None) -> str:
     )
     model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
+    global _CALL_COUNT
     for attempt in range(MAX_RETRIES):
         try:
             _sleep_delay()
@@ -68,6 +85,7 @@ def _openai_call(prompt: str, model: Optional[str] = None) -> str:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
             )
+            _CALL_COUNT += 1
             return resp.choices[0].message.content.strip()
         except Exception as e:
             err_str = str(e)

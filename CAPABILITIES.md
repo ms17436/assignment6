@@ -86,13 +86,43 @@ can cause those effects, which is also the prompt-injection defence.
 
 ---
 
+## Disposition vocabulary (Part 2)
+
+Every message is assigned **exactly one** of these, with a one-line reason:
+
+| disposition | meaning |
+|---|---|
+| `reply` | Agent should draft (and, after the gate, send) a response. |
+| `archive` | No action needed — noise, receipts, FYIs, already-resolved threads. |
+| `defer` | Legitimate but not urgent; surface later for the user. |
+| `delegate` | Hand to someone other than the owner (`delegate_to` names them). |
+| `escalate` | High-risk / high-value; needs the owner's immediate attention (incl. phishing). |
+| `flag_injection` | Contains instructions aimed at the AI; refused, flagged, never acted on. |
+
+**Rule-vs-model routing (Part 2 #3).** Obvious messages are routed by rules with
+**no model call at all**. `python demo.py --cap R1` measures this live and prints:
+
+```
+── Part 2 headline numbers ─────────────
+  Total messages:                    100
+  Rule-routed (never need a model):  67  (67%)
+  Routed to the model:               33
+  Actual LLM calls this run:         N
+undecided: 0
+```
+
+Each decision carries a `handled_by` tag (`rule:noise`, `rule:injection`,
+`rule:phishing`, `rule:preference`, `rule:sent`, or `llm`) which is written to
+`state/trace.jsonl`. The 67 rule-routed messages never touch the model even when
+an API key is configured; `Actual LLM calls` is a live counter (0 in `--no-llm`).
+
 ## Inbox analysis (Part 1)
 
 | Stat | Value |
 |------|-------|
 | Total messages processed | 100 |
-| Rule-handled (noise, no LLM) | ~52 |
-| LLM-classified | ~48 |
+| Rule-routed (never need a model) | 67 (noise 56, injection 4, phishing 3, preference 2, sent 2) |
+| Routed to the LLM | 33 |
 | Prompt injection attempts detected | 4 (m017, m024, m039, m047) |
 | Phishing / social-engineering | 3 (m021, m023, m045) |
 | Standing preferences extracted | 2 (m041, m015) |

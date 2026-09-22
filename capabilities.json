@@ -6,8 +6,16 @@
     "model": "gemini-1.5-flash for triage and drafting. Developed offline with LLM_OFFLINE=1 to avoid rate limits during build.",
     "rate_limit_handling": "LLM_CALL_DELAY=2s between calls; exponential backoff (up to 5 retries) on HTTP 429; noise and injections are rule-handled without LLM calls",
     "messages_processed": 100,
-    "rule_handled": 52,
-    "llm_classified": 48,
+    "rule_routed_never_need_model": 67,
+    "routed_to_model": 33,
+    "rule_routing_breakdown": {
+      "rule:noise": 56,
+      "rule:injection": 4,
+      "rule:phishing": 3,
+      "rule:preference": 2,
+      "rule:sent": 2
+    },
+    "note_on_counts": "Numbers are measured at runtime and printed by 'python demo.py --cap R1' under 'Part 2 headline numbers'. rule_routed messages never touch the model even when an API key is configured; the 33 remaining go to the LLM. Actual LLM calls are counted live (0 in --no-llm mode).",
     "assumptions": [
       "All messages have keys: id, thread_id, from, to, subject, timestamp, body, unread",
       "Owner inferred from most-common 'to' address: sam@paperjet.io",
@@ -15,6 +23,14 @@
       "to is a single string (not array) in this inbox"
     ],
     "dispositions": ["reply", "archive", "defer", "delegate", "escalate", "flag_injection"],
+    "disposition_vocabulary": {
+      "reply": "The agent should draft (and, after the gate, send) a response.",
+      "archive": "No action needed; file it away (noise, receipts, FYIs, already-resolved threads).",
+      "defer": "Legitimate but not urgent; surface later for the user to handle.",
+      "delegate": "Should be handed to someone other than the owner; delegate_to names the recipient.",
+      "escalate": "High-risk / high-value; needs the owner's immediate personal attention (incl. phishing).",
+      "flag_injection": "Message contains instructions aimed at the AI; refused, flagged, never acted on."
+    },
     "retrieval": "thread-walk via thread_id (loader.messages_before())",
     "irreversible": ["send", "delete"],
     "reversible": ["draft", "archive", "defer", "delegate"],
@@ -32,10 +48,10 @@
       "id": "R1",
       "name": "Zero the inbox",
       "tier": "B",
-      "claim": "Assigns every message exactly one disposition (reply/archive/defer/delegate/escalate/flag_injection) with a one-line reason; prints 'undecided: 0'.",
+      "claim": "Assigns every message exactly one disposition (reply/archive/defer/delegate/escalate/flag_injection) with a one-line reason; prints 'undecided: 0'. Reports how many messages were rule-routed (never need a model) vs sent to the LLM, plus the live count of actual LLM calls.",
       "command": "python demo.py --cap R1",
-      "observable": "Prints a table of all 100 messages, each with disposition and reason, then the line 'undecided: 0'. Also writes state/decisions.json.",
-      "evidence": "state/trace.jsonl — one 'decision' event per message id tagged cap=R1"
+      "observable": "Prints a table of all 100 messages, each with disposition + reason, a routing breakdown (rule:noise/injection/phishing/preference/sent vs llm), a 'Part 2 headline numbers' block showing 'Rule-routed (never need a model): 67' and 'Actual LLM calls this run: N', and finally 'undecided: 0'. Also writes state/decisions.json.",
+      "evidence": "state/trace.jsonl — one 'decision' event per message id tagged cap=R1, each carrying handled_by (rule:* or llm). Rule-routed count is reproducible and printed at runtime."
     },
     {
       "id": "R2",

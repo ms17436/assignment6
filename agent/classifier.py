@@ -185,6 +185,7 @@ def classify(msg: dict, use_llm: bool = True,
             "delegate_to": None,
             "deadline": None,
             "cited_ids": [],
+            "handled_by": "rule:injection",
             "injection_detail": inj,
         }
 
@@ -199,6 +200,7 @@ def classify(msg: dict, use_llm: bool = True,
             "delegate_to": None,
             "deadline": None,
             "cited_ids": [],
+            "handled_by": "rule:noise",
         }
 
     # --- Phishing check ---
@@ -213,6 +215,7 @@ def classify(msg: dict, use_llm: bool = True,
             "delegate_to": None,
             "deadline": None,
             "cited_ids": [],
+            "handled_by": "rule:phishing",
             "phishing_detail": phish_ev,
         }
 
@@ -229,6 +232,7 @@ def classify(msg: dict, use_llm: bool = True,
                 "delegate_to": None,
                 "deadline": None,
                 "cited_ids": [mid],
+                "handled_by": "rule:preference",
                 "preference_id": pref["id"],
             }
 
@@ -243,6 +247,7 @@ def classify(msg: dict, use_llm: bool = True,
             "delegate_to": None,
             "deadline": None,
             "cited_ids": [],
+            "handled_by": "rule:sent",
             "is_sent": True,
         }
 
@@ -262,6 +267,7 @@ def classify(msg: dict, use_llm: bool = True,
             )
             result = llm.call_json(prompt)
             result["id"] = mid
+            result["handled_by"] = "llm"
             return result
         except Exception as exc:
             log.warning("LLM classify failed for %s: %s", mid, exc)
@@ -276,6 +282,7 @@ def classify(msg: dict, use_llm: bool = True,
         "delegate_to": None,
         "deadline": None,
         "cited_ids": [],
+        "handled_by": "fallback",
     }
 
 

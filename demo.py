@@ -74,6 +74,9 @@ def cap_r1(use_llm: bool = True):
     print("R1: Zero the Inbox")
     print("=" * 60)
 
+    from agent import llm as llm_mod
+    llm_mod.reset_call_count()
+
     msgs = loader.load_inbox()
     decisions = classifier.classify_all(msgs, use_llm=use_llm)
     _save_decisions(decisions)
@@ -88,12 +91,36 @@ def cap_r1(use_llm: bool = True):
         reason = d.get("reason", "")[:60]
         print(f"{mid:<8}{prio:<10}{disp:<20}{reason}")
 
-    # Tally
+    # Tally by disposition
     from collections import Counter
     tally = Counter(d.get("disposition") for d in decisions)
-    print("\n" + "-" * 40)
+    print("\n── Dispositions ────────────────────────")
     for disp, count in sorted(tally.items()):
         print(f"  {disp:<25} {count}")
+
+    # Routing breakdown: how each disposition was reached (rule vs model)
+    route = Counter(d.get("handled_by", "unknown") for d in decisions)
+    rule_routed = sum(c for k, c in route.items() if k.startswith("rule"))
+    llm_routed = route.get("llm", 0)
+    print("\n── Routing (how the decision was made) ──")
+    for k, c in sorted(route.items()):
+        print(f"  {k:<25} {c}")
+
+    # The headline Part 2 numbers.
+    # "Never need a model" == rule-routed: these are decided by rules and would
+    # not touch the LLM even when one is configured. This is the stable Part 2
+    # answer (independent of offline mode). "Actual LLM calls" is the live count
+    # of real model calls this run (0 in offline/--no-llm mode).
+    total = len(decisions)
+    actual_llm_calls = llm_mod.call_count()
+    to_model = total - rule_routed
+    offline_note = "  (offline / --no-llm)" if actual_llm_calls == 0 and to_model > 0 else ""
+    print("\n── Part 2 headline numbers ─────────────")
+    print(f"  Total messages:                    {total}")
+    print(f"  Rule-routed (never need a model):  {rule_routed}  ({100*rule_routed//total}%)")
+    print(f"  Routed to the model:               {to_model}")
+    print(f"  Actual LLM calls this run:         {actual_llm_calls}{offline_note}")
+
     undecided = sum(1 for d in decisions if not d.get("disposition"))
     print(f"\nundecided: {undecided}")
 
@@ -101,6 +128,7 @@ def cap_r1(use_llm: bool = True):
     for d in decisions:
         trace.log_event("R1", "decision", message_id=d["id"],
                         disposition=d.get("disposition"), priority=d.get("priority"),
+                        handled_by=d.get("handled_by", "unknown"),
                         reason=d.get("reason", ""))
 
     return decisions
@@ -198,6 +226,17 @@ def cap_r4(use_llm: bool = True):
 
     for m in pref_msgs:
         print(f"  {m['id']}: \"{m.get('subject','')}\"")
+        # SECURITY: never turn a hostile message into a stored preference.
+        # e.g. m039 ("assistant settings … enable autonomous mode") is an
+        # injection, not a genuine user preference.
+        inj = injection.analyse(m, use_llm=use_llm)
+        if inj["is_injection"]:
+            print(f"    ⛔ REFUSED: looks like a prompt-injection, not a preference "
+                  f"({inj['evidence']}). Not stored.")
+            trace.log_event("R4", "refusal", message_id=m["id"],
+                            reason="injection masquerading as preference",
+                            evidence=inj["evidence"])
+            continue
         pref = preferences.extract_and_store(m, use_llm=use_llm)
         if pref:
             print(f"    → Stored [{pref['id']}]: {pref['description']}")

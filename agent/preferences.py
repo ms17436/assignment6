@@ -108,6 +108,16 @@ def extract_and_store(msg: dict, use_llm: bool = True) -> Optional[dict]:
     Extract preference from msg and persist it.
     Returns the stored pref dict, or None if nothing was extracted.
     """
+    # SECURITY GUARD: refuse to store a preference from a message that is
+    # actually a prompt-injection (e.g. m039 "enable autonomous mode").
+    # Done here so every caller is protected, not just demo.py.
+    from . import injection
+    inj = injection.analyse(msg, use_llm=False)  # fast rule pass only
+    if inj["is_injection"]:
+        log.warning("Refused to store preference from injection message %s: %s",
+                    msg["id"], inj["evidence"])
+        return None
+
     # Avoid duplicates
     data = _load()
     existing_ids = {p.get("source_message_id") for p in data["preferences"]}
@@ -115,8 +125,12 @@ def extract_and_store(msg: dict, use_llm: bool = True) -> Optional[dict]:
         log.info("Preference from %s already stored.", msg["id"])
         return next((p for p in data["preferences"] if p.get("source_message_id") == msg["id"]), None)
 
-    pref_data = None
-    if use_llm:
+    # Deterministic parser FIRST — keeps the "obvious ones need no model" claim
+    # honest. Only fall back to the LLM for preference messages the rule parser
+    # cannot handle.
+    pref_data = _rule_parse(msg)
+
+    if not pref_data and use_llm:
         try:
             prompt = _EXTRACT_PROMPT.format(
                 from_=msg.get("from", ""),
@@ -127,10 +141,6 @@ def extract_and_store(msg: dict, use_llm: bool = True) -> Optional[dict]:
             pref_data = llm.call_json(prompt)
         except Exception as exc:
             log.warning("LLM preference extraction failed for %s: %s", msg["id"], exc)
-
-    if not pref_data:
-        # Fallback: manual rules for known messages
-        pref_data = _hardcoded_fallback(msg)
 
     if not pref_data:
         return None
@@ -147,6 +157,43 @@ def extract_and_store(msg: dict, use_llm: bool = True) -> Optional[dict]:
     _save(data)
     log.info("Stored preference: %s", pref["description"])
     return pref
+
+
+def _rule_parse(msg: dict) -> Optional[dict]:
+    """
+    Deterministic (no-LLM) preference parser.
+    Handles common, unambiguous patterns with regex, then falls back to the
+    known-message table. Returns None if nothing deterministic matched, in
+    which case the caller may try the LLM.
+    """
+    body = msg.get("body", "")
+
+    # Pattern: "no meetings before 11:00am" / "don't take meetings before 9am"
+    m = re.search(
+        r"(?:no|don't|do not|never)\b[^.]*?\bmeetings?\b[^.]*?\bbefore\s+"
+        r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?",
+        body, re.IGNORECASE,
+    )
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2) or 0)
+        ampm = (m.group(3) or "").lower()
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        if ampm == "am" and hour == 12:
+            hour = 0
+        cutoff = f"{hour:02d}:{minute:02d}"
+        return {
+            "type": "calendar",
+            "description": (
+                f"Do not accept or propose meetings before {cutoff}. "
+                f"If someone proposes earlier, counter-offer at {cutoff} or later."
+            ),
+            "rule": f"no_meetings_before={cutoff}",
+        }
+
+    # Harder cases (name→domain mapping etc.) handled by the known-message table.
+    return _hardcoded_fallback(msg)
 
 
 def _hardcoded_fallback(msg: dict) -> Optional[dict]:
