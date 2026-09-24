@@ -1,14 +1,12 @@
 """
 LLM abstraction with rate-limiting, retry on HTTP 429, and configurable delay.
 
-═══════════════════════════════════════════════════════════════════════════════
-  ►►► CHANGE THE MODEL HERE — this block is the single source of truth. ◄◄◄
-═══════════════════════════════════════════════════════════════════════════════
-Set PROVIDER and MODEL below (or override with env vars LLM_PROVIDER / LLM_MODEL
-without editing code). Everything else in the codebase calls llm.call() and never
-names a model, so this is the only place a model is chosen.
+The provider and model come from environment variables loaded by `config.py`
+(optionally from a `.env` file — see `.env.example`). Everything else in the
+codebase calls llm.call() and never names a model, so config.py is the only
+place a model is chosen.
 
-  PROVIDER options:
+  LLM_PROVIDER options:
     "ollama"  — local model via Ollama       (needs `ollama serve`, a pulled model)
     "gemini"  — Google Gemini                 (needs GEMINI_API_KEY)
     "openai"  — any OpenAI-compatible endpoint (needs OPENAI_API_KEY [+ OPENAI_BASE_URL])
@@ -16,55 +14,45 @@ names a model, so this is the only place a model is chosen.
     "auto"    — pick the first provider whose credentials are present, else offline
 """
 
-import os
 import time
 import json
 import logging
 import re
 from typing import Optional
 
+import config
+
 log = logging.getLogger("agent.llm")
 
-# ─────────────────────────── MODEL CONFIG (edit here) ───────────────────────
-PROVIDER = os.environ.get("LLM_PROVIDER", "auto")     # ollama|gemini|openai|offline|auto
-MODEL    = os.environ.get("LLM_MODEL", "")            # blank → use provider default below
-
-DEFAULT_MODEL = {
-    "ollama": "qwen2.5:1.5b",
-    "gemini": "gemini-1.5-flash",
-    "openai": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-}
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Seconds to sleep between every LLM call (keeps free-tier under the RPM cap)
-CALL_DELAY = float(os.environ.get("LLM_CALL_DELAY", "2"))
-MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "5"))
+MAX_RETRIES = config.max_retries()
 
 
 def _resolve_provider() -> str:
     """Return the effective provider, honouring LLM_OFFLINE and 'auto' detection."""
-    if os.environ.get("LLM_OFFLINE", "0") == "1":
+    if config.offline():
         return "offline"
-    if PROVIDER != "auto":
-        return PROVIDER
+    chosen = config.provider()
+    if chosen != "auto":
+        return chosen
     # auto: first available wins
-    if os.environ.get("OLLAMA_MODEL"):
+    if config.get("OLLAMA_MODEL"):
         return "ollama"
-    if os.environ.get("GEMINI_API_KEY"):
+    if config.get("GEMINI_API_KEY"):
         return "gemini"
-    if os.environ.get("OPENAI_API_KEY"):
+    if config.get("OPENAI_API_KEY"):
         return "openai"
     return "offline"
 
 
 def _resolve_model(provider: str) -> str:
-    """Model name for a provider: explicit MODEL/LLM_MODEL wins, else the default."""
-    if MODEL:
-        return MODEL
-    # Back-compat: OLLAMA_MODEL still selects the ollama model when set
-    if provider == "ollama" and os.environ.get("OLLAMA_MODEL"):
-        return os.environ["OLLAMA_MODEL"]
-    return DEFAULT_MODEL.get(provider, "")
+    """Model name for a provider: LLM_MODEL wins, then the provider's own var, then the default."""
+    if config.model():
+        return config.model()
+    if provider == "ollama" and config.get("OLLAMA_MODEL"):
+        return config.get("OLLAMA_MODEL")
+    if provider == "openai" and config.get("OPENAI_MODEL"):
+        return config.get("OPENAI_MODEL")
+    return config.DEFAULT_MODEL.get(provider, "")
 
 
 def active_config() -> dict:
@@ -116,15 +104,16 @@ def reset_call_count():
 
 
 def _sleep_delay():
-    if CALL_DELAY > 0:
-        time.sleep(CALL_DELAY)
+    delay = config.call_delay()
+    if delay > 0:
+        time.sleep(delay)
 
 
 def _gemini_call(prompt: str, model: str = "gemini-1.5-flash") -> str:
     import google.generativeai as genai  # type: ignore
 
     global _CALL_COUNT
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key = config.get("GEMINI_API_KEY")
     genai.configure(api_key=api_key)
     gen_model = genai.GenerativeModel(model)
 
@@ -149,10 +138,10 @@ def _openai_call(prompt: str, model: Optional[str] = None) -> str:
     from openai import OpenAI  # type: ignore
 
     client = OpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY", ""),
-        base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        api_key=config.get("OPENAI_API_KEY"),
+        base_url=config.get("OPENAI_BASE_URL") or "https://api.openai.com/v1",
     )
-    model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    model = model or _resolve_model("openai")
 
     global _CALL_COUNT
     for attempt in range(MAX_RETRIES):
@@ -185,7 +174,7 @@ def _ollama_call(prompt: str, model: str) -> str:
     import urllib.request
 
     global _CALL_COUNT
-    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    host = (config.get("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
     url = f"{host}/api/chat"
     payload = {
         "model": model,
@@ -218,8 +207,8 @@ def _ollama_call(prompt: str, model: str) -> str:
 def call(prompt: str, model: Optional[str] = None) -> str:
     """
     Call the configured LLM. Returns the text response.
-    Provider + model are resolved from the single MODEL CONFIG block at the top
-    of this file (or LLM_PROVIDER / LLM_MODEL env overrides). No other module
+    Provider + model are resolved from environment variables via config.py
+    (LLM_PROVIDER / LLM_MODEL, optionally from .env). No other module
     names a model.
     """
     provider = _resolve_provider()

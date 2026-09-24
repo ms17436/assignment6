@@ -10,6 +10,8 @@ Two-pass pipeline:
 
   Pass 2 — LLM (only for messages that survived pass 1):
     • Everything else gets a disposition + reason from the LLM
+    • With no model (offline) or a failed call: a deterministic heuristic
+      (automated sender / legal-or-money / asks Sam / time pressure)
 
 Dispositions:
   reply      — draft and (gate-)send a reply
@@ -252,7 +254,7 @@ def classify(msg: dict, use_llm: bool = True,
         }
 
     # --- LLM pass ---
-    if use_llm:
+    if use_llm and llm.active_config()["provider"] != "offline":
         try:
             thread_ctx = _thread_context_str(msg)
             pref_summary = preferences.describe_all()
@@ -277,18 +279,68 @@ def classify(msg: dict, use_llm: bool = True,
         except Exception as exc:
             log.warning("LLM classify failed for %s: %s", mid, exc)
 
-    # --- Fallback ---
-    return {
-        "id": mid,
-        "disposition": "defer",
-        "priority": "normal",
-        "reason": "LLM unavailable — deferred for manual review.",
-        "action_needed": True,
-        "delegate_to": None,
-        "deadline": None,
-        "cited_ids": [],
-        "handled_by": "fallback",
-    }
+    return _heuristic_classify(msg)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic fallback for model-routed messages when no model is available
+# (offline, or the call failed). Coarser than a model, but never silently
+# archives a human asking Sam for something.
+# ---------------------------------------------------------------------------
+
+_AUTOMATED_LOCALPART = re.compile(
+    r"^(no-?reply|noreply|notifications?|notify|alerts?|checkin|success|help|"
+    r"support|appointments?|billing|receipts?|updates?|info)\b")
+_LEGAL_OR_MONEY = re.compile(
+    r"\b(sign(ature)?|signed|safe|contract|clause|ip assignment|board minutes|invoice|"
+    r"wire|payment|remittance|deposit)\b", re.I)
+_ASKS_SAM = re.compile(
+    r"\?|\b(can|could|would) (you|we)\b|\bplease\b|\bneed (your|you to)\b|"
+    r"\bfollow(ing)? up\b", re.I)
+_TIME_PRESSURE = re.compile(
+    r"\b(by|before) (the )?(\d{1,2}(st|nd|rd|th)?|mon|tue|wed|thu|fri|sat|sun|"
+    r"today|tomorrow|end of)|\burgent\b|\basap\b|\bneed it done\b|\bthis week\b|"
+    r"\bdays before\b|\banother offer\b|\bexpires?\b|\bhard date\b", re.I)
+_CLOSE_CONTACTS = {"colleague", "old_friend"}
+
+
+def _heuristic_classify(msg: dict) -> dict:
+    from . import tone   # tone imports drafter; import late to avoid a cycle
+
+    mid = msg["id"]
+    sender = msg.get("from", "").lower()
+    text = f"{msg.get('subject', '')}\n{msg.get('body', '')}"
+    relationship, _ = tone.classify_relationship(msg)
+    asks = bool(_ASKS_SAM.search(msg.get("body", "")))
+    pressing = bool(_TIME_PRESSURE.search(text))
+
+    def decision(disposition, priority, reason, action_needed):
+        return {
+            "id": mid, "disposition": disposition, "priority": priority,
+            "reason": f"[heuristic] {reason}", "action_needed": action_needed,
+            "delegate_to": None, "deadline": None, "cited_ids": [],
+            "handled_by": "fallback:heuristic",
+        }
+
+    if _AUTOMATED_LOCALPART.match(sender.split("@")[0]):
+        return decision("archive", "low",
+                        "Automated sender (notification/receipt/reminder) — no reply needed.",
+                        False)
+    if relationship == "lawyer" or _LEGAL_OR_MONEY.search(text):
+        return decision("escalate", "high",
+                        "Legal or money matter (signature/contract/payment) — Sam decides personally.",
+                        True)
+    if asks and (relationship not in _CLOSE_CONTACTS or pressing):
+        return decision("reply", "high",
+                        f"{relationship.replace('_', ' ')} is asking Sam for something"
+                        f"{' with a deadline' if pressing else ''} — reply needed.",
+                        True)
+    if asks:
+        return decision("reply", "normal",
+                        f"{relationship.replace('_', ' ')} is asking Sam for something — reply when free.",
+                        True)
+    return decision("archive", "low",
+                    "FYI / status update — nothing asked of Sam.", False)
 
 
 def classify_all(msgs: list, use_llm: bool = True) -> list[dict]:

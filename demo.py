@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PaperJet Inbox Agent — demo entry point.
+inboxHero — demo entry point.
 
 Usage:
   python demo.py --cap R1              # triage every message
@@ -17,7 +17,7 @@ Environment variables:
   GEMINI_API_KEY   — Google Gemini API key
   OPENAI_API_KEY   — OpenAI-compatible key (set OPENAI_BASE_URL for local models)
   LLM_OFFLINE=1    — disable LLM, use heuristics only
-  LLM_CALL_DELAY   — seconds between LLM calls (default 2)
+  LLM_CALL_DELAY   — seconds between LLM calls (default 4)
   AUTO_APPROVE=1   — auto-approve all gate prompts (testing only)
 """
 
@@ -649,8 +649,8 @@ def cap_x6(msg_id: str = "m023", use_llm: bool = False):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="PaperJet Inbox Agent demo")
-    parser.add_argument("--cap", help="Capability to run (R1, R2, R3, R4, R5, R6, X1, X2)")
+    parser = argparse.ArgumentParser(description="inboxHero demo")
+    parser.add_argument("--cap", help="Capability to run (R1-R6, X1-X6)")
     parser.add_argument("--msg", help="Message ID for --cap R2", default="m008")
     parser.add_argument("--dry-run", action="store_true", help="Show what would happen, write nothing")
     parser.add_argument("--no-llm", action="store_true", help="Disable LLM (offline/heuristic mode)")
@@ -661,17 +661,17 @@ def main():
     parser.add_argument("--thread", default="t-launch", help="Thread id for --cap X4")
     args = parser.parse_args()
 
-    use_llm = not args.no_llm
     if args.no_llm:
         os.environ["LLM_OFFLINE"] = "1"
+    from agent import llm as _llm
+    use_llm = _llm.active_config()["provider"] != "offline"
 
     if args.clear_trace:
         trace.clear()
         log.info("Trace cleared.")
 
-    # Print inbox stats + the active model (single source of truth: agent/llm.py)
+    # Print inbox stats + the active model (resolved from env vars via config.py)
     stats = loader.stats()
-    from agent import llm as _llm
     cfg = _llm.active_config()
     print(f"\n📬 Inbox: {stats['total_messages']} messages | {stats['unread_messages']} unread | "
           f"{stats['total_threads']} threads | Owner: {stats['owner']}")

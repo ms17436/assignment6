@@ -239,7 +239,7 @@ def _render_html(d: dict) -> str:
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>PaperJet Inbox Dashboard</title>
+<title>inboxHero Dashboard</title>
 <style>
   body {{ font-family: system-ui, sans-serif; max-width: 1200px; margin: 2em auto; padding: 0 1em; color: #222; }}
   h1 {{ border-bottom: 3px solid #2c3e50; padding-bottom: .4em; }}
@@ -260,7 +260,7 @@ def _render_html(d: dict) -> str:
 </style>
 </head>
 <body>
-<h1>📬 PaperJet Inbox Dashboard</h1>
+<h1>📬 inboxHero Dashboard</h1>
 <p>Generated: {gen} | <a href="dashboard.json">JSON version</a> | reproducible from <code>python demo.py --cap R6</code></p>
 
 <div class="summary-grid">

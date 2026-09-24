@@ -1,10 +1,11 @@
-# PaperJet Inbox Agent
+# inboxHero
 
-**GitHub Repository:** https://github.com/[your-username]/paperjet-inbox-agent
+**GitHub Repository:** https://github.com/ms17436/assignment6
 
 > Assignment 6 — Agentic AI Program, IIIT Hyderabad (June 2026 Cohort)
 
-An AI email-triage agent for a busy founder's inbox. Given 100 messages it
+inboxHero is an AI email-triage agent for a busy founder's inbox: Sam, founder of
+PaperJet, the fictional startup whose mailbox is `inbox.json`. Given 100 messages it
 classifies every one, drafts grounded replies, detects prompt injections,
 enforces a human-approval gate for irreversible actions, persists standing
 preferences across restarts, and generates an interactive dashboard.
@@ -13,85 +14,107 @@ preferences across restarts, and generates an interactive dashboard.
 
 ## Quick start
 
+Requires Python 3.9+. With no configuration at all it runs offline on
+deterministic heuristics, so every command below works from a clean checkout.
+
 ```bash
-cd assignment6/
+git clone https://github.com/ms17436/assignment6.git && cd assignment6
 
-# Install dependencies (only the LLM client you plan to use)
-pip install -r requirements.txt
-
-# Set your API key (Gemini recommended)
-export GEMINI_API_KEY=your_key_here
-
-# ── Choosing a model — ONE place ─────────────────────────────
-# The single source of truth is the MODEL CONFIG block at the top of agent/llm.py.
-# Change it there, OR override without editing code via two env vars:
-#   LLM_PROVIDER = ollama | gemini | openai | offline | auto
-#   LLM_MODEL    = <model name>   (blank = provider default)
-# The startup banner prints the resolved "provider=… model=…".
-
-# Local model via native Ollama backend (no extra Python deps):
-ollama serve &
-export LLM_PROVIDER=ollama
-export LLM_MODEL=qwen2.5:1.5b     # or llama3.1:latest, qwen3:4b, gemma3:4b …
-export LLM_CALL_DELAY=0           # local — no rate limit needed
-
-# Google Gemini:
-export LLM_PROVIDER=gemini LLM_MODEL=gemini-1.5-flash GEMINI_API_KEY=...
-
-# Any OpenAI-compatible endpoint (requires: pip install openai):
-export LLM_PROVIDER=openai LLM_MODEL=gpt-4o-mini OPENAI_API_KEY=... OPENAI_BASE_URL=...
-
-# Or run completely offline (heuristics only)
-export LLM_OFFLINE=1
-
-# Run all capabilities
-python demo.py --all
-
-# Run a specific capability
-python demo.py --cap R1              # triage all 100 messages
-python demo.py --cap R2 --msg m008  # grounded reply (uses thread context from m003)
-python demo.py --cap R3 --dry-run   # show what would be sent, write nothing
-python demo.py --cap R4             # extract & persist preferences
-python demo.py --cap R5             # detect all 4 prompt injections
-python demo.py --cap R6             # generate dashboard.html
-python demo.py --cap X1             # follow-up tracker
-python demo.py --cap X2             # morning digest
-python demo.py --cap X3             # batch category handler (Tier A, no LLM)
-python demo.py --cap X4 --thread t-launch  # summarize thread to its open question
-python demo.py --cap X5 --msg m051  # tone matching to the correspondent
-python demo.py --cap X6 --msg m023  # explain why a message was handled that way
+pip install -r requirements.txt   # optional: only the model client you plan to use
+cp .env.example .env              # optional: choose a provider and add keys
 ```
+
+### Model configuration
+
+The model provider is configured **only through environment variables**, loaded by
+`config.py` (from the real environment, or from a `.env` file you create from
+`.env.example`; real environment variables win). Nothing is hardcoded and no `.env`
+is committed. The startup banner prints the resolved `provider=… model=…`.
+
+| variable | meaning |
+|---|---|
+| `LLM_PROVIDER` | `ollama` \| `gemini` \| `openai` \| `offline` \| `auto` (default `auto`: first provider with credentials, else offline) |
+| `LLM_MODEL` | model name; blank = provider default (`qwen2.5:1.5b`, `gemini-1.5-flash`, `gpt-4o-mini`) |
+| `GEMINI_API_KEY` | Google Gemini |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | OpenAI or any OpenAI-compatible endpoint |
+| `OLLAMA_HOST`, `OLLAMA_MODEL` | local Ollama (`ollama serve`), native backend, no extra deps |
+| `LLM_OFFLINE=1` | force offline heuristics (same as `--no-llm`) |
+| `LLM_CALL_DELAY`, `LLM_MAX_RETRIES` | rate limiting (4 s between calls, 5 retries on HTTP 429) |
+
+### Commands (same order as the manifest)
+
+```bash
+python demo.py --cap R1                   # triage all 100 messages
+python demo.py --cap R2 --msg m008        # grounded reply (thread context from m003)
+python demo.py --cap R3 --dry-run         # show sends/deletes, write nothing
+python demo.py --cap R4 --phase store     # persist preferences, then exit
+python demo.py --cap R4 --phase apply     # NEW process: behaviour driven by stored prefs
+python demo.py --cap R5                   # detect + refuse all 4 injections
+python demo.py --cap R6                   # dashboard.html + dashboard.json
+python demo.py --cap X1                   # follow-up tracker
+python demo.py --cap X2                   # morning digest
+python demo.py --cap X3                   # batch category handler (Tier A, no LLM)
+python demo.py --cap X4 --thread t-launch # summarize thread to its open question
+python demo.py --cap X5 --msg m051        # tone matching to the correspondent
+python demo.py --cap X6 --msg m023        # explain why a message was handled that way
+
+python demo.py --all                      # everything in order (R3 forced to dry-run)
+```
+
+R2 and X1 stop at `Send this draft? [y/N]`; answering `N` or pressing Enter sends
+nothing. `AUTO_APPROVE=1 python demo.py --cap R3` exercises a real send + delete
+through the gate (test mode only).
+
+### Outputs of a full run
+
+- `outbox/` — `sent_<id>.json` / `deleted_<id>.json`, written only by `agent/gate.py`
+- `state/trace.jsonl` — one JSON event per decision, read, draft, refusal and gate decision
+- `state/prefs.json`, `state/decisions.json`, `dashboard.html`, `dashboard.json`
+
+The `outbox/` and `state/trace.jsonl` in the submitted zip come from a fresh copy with
+no model configured (offline), running the commands above in order plus
+`AUTO_APPROVE=1 python demo.py --cap R3` so the gate performs real writes. Offline
+drafts therefore carry a `[DRAFT UNAVAILABLE — LLM not configured]` placeholder body.
+These generated files are git-ignored in the repository.
 
 ---
 
 ## Project structure
 
 ```
-assignment6/
+inboxHero/
 ├── inbox.json              # 100 email messages (given)
 ├── demo.py                 # main entry point — all --cap flags
+├── config.py               # model provider settings from env vars / .env
+├── .env.example            # template for .env (the real .env is never committed)
 ├── requirements.txt
 ├── CAPABILITIES.md         # human-readable manifest
 ├── capabilities.json       # machine-readable manifest
 ├── dashboard.html          # generated by --cap R6
 ├── dashboard.json          # generated by --cap R6
-├── outbox/                 # sent drafts written here (gate-controlled)
+├── outbox/                 # sent_<id>.json / deleted_<id>.json — written ONLY by gate.py
 ├── state/
 │   ├── prefs.json          # persistent preferences
 │   ├── decisions.json      # cached triage decisions
 │   └── trace.jsonl         # structured action log
 └── agent/
-    ├── llm.py              # LLM abstraction: Gemini / OpenAI / offline
-    ├── loader.py           # inbox loader + thread walker
-    ├── classifier.py       # two-pass triage (rule → LLM)
+    ├── llm.py              # model config + backends: Ollama / Gemini / OpenAI / offline
+    ├── loader.py           # inbox loader + thread index
+    ├── classifier.py       # two-pass triage (rule → LLM) — the router
     ├── injection.py        # prompt-injection detector
     ├── preferences.py      # persistent preference store
+    ├── scheduling.py       # evaluates proposed meeting times against stored prefs
+    ├── retrieval.py        # thread-walk + keyword search + citation verification
     ├── drafter.py          # grounded reply drafter
     ├── gate.py             # approval gate for irreversible actions
     ├── commitments.py      # deadline + meeting extractor, conflict detector
     ├── dashboard.py        # HTML + JSON dashboard generator
-    ├── digest.py           # morning digest (X2)
     ├── followup.py         # follow-up tracker (X1)
+    ├── digest.py           # morning digest (X2)
+    ├── batch.py            # batch category handler (X3)
+    ├── summarize.py        # thread summarizer (X4)
+    ├── tone.py             # tone matching (X5)
+    ├── explain.py          # explainability (X6)
     └── trace.py            # structured trace log writer
 ```
 
@@ -102,12 +125,13 @@ assignment6/
 | Category | Messages |
 |---|---|
 | Total | 100 |
-| Pure noise (auto-archived) | ~52 |
+| Pure noise (auto-archived by rule) | 56 |
+| Rule-routed in total (never need a model) | 67 |
 | Prompt injections | 4: m017, m024, m039, m047 |
 | Phishing / social engineering | 3: m021 (fake invoice), m023 (CEO fraud wire), m045 (fake IT alert) |
 | Standing preferences | 2: m041 (no meetings before 11am), m015 (CC Priya on legal) |
 | Scheduling conflicts | Sep 15 15:00 (m010 vs m061); Wed 14:00 (m016 vs m013) |
-| Ambiguous | m012 ("the thing" — ask for clarification) |
+| Not answerable from inbox | m012 ("the thing" from a verbal chat — no draft produced) |
 | Thread-dependent reply | m008 needs m003 (AMQP credentials context) |
 | Long thread / buried request | t-launch (9 messages); actual Sam-specific request in m030 |
 
@@ -146,34 +170,130 @@ Pass 1: rule-based (no LLM)
   └── preference message? ─────────► preferences.py stores ──► archive
      │
      ▼
-Pass 2: LLM (Gemini 1.5 Flash)
-  classifier.py ── thread context from loader.py
+Pass 2: LLM (provider from env vars via config.py)
+  classifier.py ── email text wrapped as «UNTRUSTED_EMAIL»
      │
      ▼
   disposition: reply / archive / defer / delegate / escalate
      │
-     ├── if reply ──► drafter.py (cites thread messages)
+     ├── if reply ──► retrieval.py (thread-walk, keyword fallback, hostile msgs dropped)
      │                    │
-     │                    └── gate.py (y/n or --dry-run)
+     │                    ▼
+     │                drafter.py (only verified citations; nothing grounded → no draft)
+     │                    │
+     │                    └── gate.py (y/N or --dry-run)
      │                              │
-     │                              └── outbox/*.json
+     │                              └── outbox/sent_<id>.json
      │
      └── dashboard.py ── commitments.py ── conflict detection
 ```
+
+A single Python process: `demo.py` loads the inbox, routes each message through a
+cheap rule pass and then (only if needed) the model, and hands replies through
+retrieval, drafting and the gate. State that must survive a restart lives in small
+JSON files under `state/`.
+
+---
+
+## Framework choice
+
+**No agent framework: plain Python** (no CrewAI, ADK, LangChain or LangGraph).
+Deterministic checks settle 67 of the 100 messages before any model runs. The other 33
+always take the same route: classify, fetch thread context, draft, gate. Nothing in
+that route needs agents negotiating or passing work back and forth, which is the
+problem those frameworks solve. What does matter here (the send gate, the injection
+checks, citation verification) is easier to audit as plain functions. If a framework
+were required, LangGraph would be the closest match: one node per step, an interrupt
+for the approval prompt, a checkpointer in place of `state/`. Final Report question 4
+maps our modules onto Agents, Tasks, Crew and router.
+
+---
+
+## Disposition vocabulary
+
+Every message gets **exactly one** disposition plus a one-line reason:
+
+| disposition | meaning |
+|---|---|
+| `reply` | Draft a response; it can only be sent after the gate. |
+| `archive` | No action needed: noise, receipts, FYIs, resolved threads. |
+| `defer` | Legitimate but not urgent; surface later. |
+| `delegate` | Someone other than the owner should handle it (`delegate_to` names them). |
+| `escalate` | High-risk or high-value; needs the owner personally (includes phishing). |
+| `flag_injection` | Contains instructions aimed at the AI; refused, flagged, left in place. |
+
+Each decision also records `handled_by` (`rule:noise`, `rule:injection`,
+`rule:phishing`, `rule:preference`, `rule:sent`, `llm`, or `fallback:heuristic`) in
+`state/trace.jsonl`. With no model configured, the 33 model-routed messages are
+decided by a deterministic heuristic: automated sender → `archive`; legal or money →
+`escalate`; a question for Sam → `reply` (high priority if external or
+time-pressured); otherwise `archive` as FYI.
+
+---
+
+## Reversible vs irreversible actions, and the gate
+
+| class | actions | why |
+|---|---|---|
+| Reversible (no approval) | `draft`, `label`, `archive`, `defer`, `delegate` | can be edited or undone in place |
+| Irreversible (gated) | `send`, `delete` | a message written to `outbox/` counts as delivered and cannot be recalled; `inbox.json` has no deleted-items folder to restore from |
+
+`agent/gate.py` is the single choke-point: `gate.send()` and `gate.delete()` are the
+only code that writes to `outbox/`, and both call `require_approval()` first. It offers
+an interactive `y/N` prompt per action and a `--dry-run` mode that writes nothing
+(`AUTO_APPROVE=1` exists for tests only). Every gated action is logged once to
+`state/trace.jsonl` with the proposal, the human decision and the outcome, and
+`gate.audit_outbox()` checks that `outbox/` holds only gate-written files. Anything
+else in the system, including the model, can at most produce an in-memory draft.
+
+---
+
+## Retrieval approach
+
+**Thread-walk first, keyword search as fallback, citations verified.**
+`retrieval.thread_walk()` collects earlier messages with the same `thread_id`. In this
+inbox the fact a reply needs usually sits earlier in its own thread (m008's "the URL
+you gave Raghav" is in m003), so there is no vector index. When the thread is thin or
+the message refers back to something
+("previous email", "resend"), `retrieval.keyword_search()` does a conservative
+cross-thread lookup (e.g. m055 finds m018). Injection and phishing messages are removed
+from the grounding context. `retrieval.verify_citations()` then keeps only cited ids
+that exist in the store **and** were actually retrieved; if nothing grounds the answer
+(m012), no draft is produced.
 
 ---
 
 ## Rate limiting
 
-- 2-second sleep between every LLM call (`LLM_CALL_DELAY`)
-- Exponential back-off on HTTP 429 (5 retries max)
-- ~52 messages are handled by rules with **zero LLM calls**
-- Use `--no-llm` or `LLM_OFFLINE=1` during development to avoid quota
+- 4-second sleep between every model call (`LLM_CALL_DELAY`), which keeps a free tier
+  under about 15 requests per minute; set it to `0` for local Ollama
+- HTTP 429 is retried with exponential back-off (5 attempts). If a call still fails,
+  that message falls back to the deterministic heuristic, so the run never crashes
+- Instead of batching several messages into one prompt, the rule pass keeps 67 of 100
+  messages away from the model entirely, so triage costs at most 33 calls
+- Built against local Ollama (`qwen2.5:1.5b`) and offline mode (`--no-llm`), so
+  development used no API quota
+
+---
+
+## Final Report
+
+**1. What did you refuse to automate?**
+The system will not invent a reply to Priya's m012 ("that thing we talked about after the standup"). `retrieval.thread_walk` / `keyword_search` find no inbox evidence, `verify_citations` has nothing to ground, and `drafter.py` therefore emits no draft (`no_draft` in `state/trace.jsonl`) instead of guessing a verbal conversation. That is the same line as irreversible mail: `gate.send()` and `gate.delete()` never run unattended, so a reply such as m008 (resend the staging URL, grounded on m003) can be drafted but cannot land in `outbox/` without a human `y` (and `--dry-run` writes nothing at all). We drew the line there because a wrong send in Sam's name cannot be unsent, while a missed archive of a receipt can. Injections (m017, m024, m039, m047) and phishing (m021, m023, m045) are also refused or escalated, never executed.
+
+**2. Where does untrusted text enter your system?**
+Untrusted text is every `from` / `subject` / `body` loaded from `inbox.json` by `loader.py` — including spoofed "assistant config" in m039 and the buried forward in m047. That text is data, not control: `classifier.py` / `injection.py` run a rule pass *before* any disposition, `llm.wrap_untrusted()` wraps bodies in `«UNTRUSTED_EMAIL»` behind `UNTRUSTED_PREAMBLE`, and retrieval drops injection/phishing ids from grounding so they cannot become "evidence" for a draft. The only instructions the process follows are our Python (and a human at the gate). An attacker who wanted the system to act for them would have to evade `injection.py`, survive the wrap, still reach `drafter.py`, *and* get `gate.require_approval()` to return `approved` — the last hop is not a prompt; it is the only code path that writes `outbox/sent_<id>.json`.
+
+**3. Who is accountable when it sends the wrong thing?**
+The human who typed `y` at `gate.require_approval()` is answerable (or whoever set `AUTO_APPROVE=1`, which is for tests only): until that decision the reply exists only as an in-memory draft, and `gate.send()` is the only code that writes `outbox/`. A bad wording, a wrong fact, or a wrong `to` on, say, Devika's m008 reply is therefore an approved send in Sam's name, not an agent acting alone, although the system still owes the approver an honest draft, which is why unverifiable citations are stripped before the draft is shown. `state/trace.jsonl` records each gate event with `proposed` (to, subject, cited_ids, body_len), `human_decision` (`approved` / `rejected` / `dry_run`), `outcome`, and `outfile`; R2 also logs `read` / `draft` / `grounding_ok`. `python demo.py --cap X6 --msg <id>` (`agent/explain.py`) replays which checks fired so you can see whether the failure was retrieval, classification, or the approval click.
+
+**4. Name your own machinery.**
+`classifier.py` (rule pass + LLM pass) is the **router**; `drafter.py`, `injection.py`, `preferences.py`, and `commitments.py` are the specialist **agents**; each `--cap` in `demo.py` is a **task**; `demo.py` itself is the **crew** that runs them in order. The framework pieces we built ourselves are the choke-point in `agent/gate.py`, JSON "checkpointing" under `state/` (`prefs.json`, `trace.jsonl`), the untrusted-data wrap in `agent/llm.py`, and provider switching via `config.py`. LangGraph would have given us the approval interrupt and a checkpointer for free, but here it would have hurt more than helped: 67 messages never reach a model and the other 33 follow one fixed route, so a graph would only wrap the same functions while hiding the one property we most need to show a reviewer, that `gate.py` is the sole path to `outbox/`.
 
 ---
 
 ## See also
 
-- `CAPABILITIES.md` — design rationale and final report
+- `CAPABILITIES.md` — design rationale and capability evidence
 - `capabilities.json` — machine-readable capability evidence
 - `state/trace.jsonl` — structured log of every agent action

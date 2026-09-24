@@ -1,13 +1,13 @@
 {
-  "student": "[Your Name], [Your ID]",
-  "repo": "https://github.com/[your-username]/paperjet-inbox-agent",
+  "student": "Manisha Sharma, cert-aai-2026-06-0031",
+  "repo": "https://github.com/ms17436/assignment6",
   "system": {
     "framework": "none — pure Python pipeline, no CrewAI/ADK/LangChain",
-    "model": "Pluggable. gemini-1.5-flash (GEMINI_API_KEY) or any OpenAI-compatible endpoint, OR a local model via the native Ollama backend (set OLLAMA_MODEL, e.g. qwen2.5:1.5b — no extra Python deps, uses stdlib urllib against http://localhost:11434). Developed offline with LLM_OFFLINE=1 / --no-llm to avoid rate limits.",
+    "model": "Pluggable, configured only by environment variables loaded in config.py (optionally from .env; see .env.example). LLM_PROVIDER = ollama | gemini | openai | offline | auto, LLM_MODEL = model name. Defaults: ollama qwen2.5:1.5b (native stdlib backend, no extra deps), gemini gemini-1.5-flash (GEMINI_API_KEY), openai gpt-4o-mini (OPENAI_API_KEY [+ OPENAI_BASE_URL]). With no variables set it runs offline on deterministic heuristics. Developed offline and against local Ollama qwen2.5:1.5b.",
     "local_model_note": "Tested live with Ollama qwen2.5:1.5b. Good at extraction/summarisation (X4 thread summary produced an accurate summary, buried question m030, deadline 2026-09-12). Weaker at the nuanced draft-answerability judgement in R2: the 1.5B model is confused by the Part 6 untrusted-data wrapping and sometimes marks a self-contained message as 'not answerable'. The pipeline degrades gracefully (deterministic fallback). A larger model handles the security framing and drafting simultaneously.",
-    "rate_limit_handling": "LLM_CALL_DELAY=2s between calls; exponential backoff (up to 5 retries) on HTTP 429; noise and injections are rule-handled without LLM calls",
+    "rate_limit_handling": "LLM_CALL_DELAY=4s before every call (<= 15 requests/minute); HTTP 429 retried with exponential backoff (up to 5 attempts); a message whose call still fails falls back to the deterministic heuristic instead of crashing. No multi-message batching: the rule pass keeps 67 of 100 messages away from the model, so triage needs at most 33 calls. Developed against local Ollama qwen2.5:1.5b and offline mode.",
     "messages_processed": 100,
-    "rule_routed_never_need_model": 67,
+    "rule_handled": 67,
     "routed_to_model": 33,
     "rule_routing_breakdown": {
       "rule:noise": 56,
@@ -23,7 +23,14 @@
       "Timestamps are ISO 8601 local time, treated as a single timezone for conflict detection",
       "to is a single string (not array) in this inbox"
     ],
-    "dispositions": ["reply", "archive", "defer", "delegate", "escalate", "flag_injection"],
+    "dispositions": [
+      "reply",
+      "archive",
+      "defer",
+      "delegate",
+      "escalate",
+      "flag_injection"
+    ],
     "disposition_vocabulary": {
       "reply": "The agent should draft (and, after the gate, send) a response.",
       "archive": "No action needed; file it away (noise, receipts, FYIs, already-resolved threads).",
@@ -33,14 +40,28 @@
       "flag_injection": "Message contains instructions aimed at the AI; refused, flagged, never acted on."
     },
     "retrieval": "PRIMARY: thread-walk via thread_id (retrieval.thread_walk). FALLBACK: cross-thread keyword/sender search (retrieval.keyword_search) used when the thread is thin or the message refers back to an earlier one. Hostile messages (injection/phishing) are filtered out of grounding context. Citations are verified against the mail store AND the retrieved set by retrieval.verify_citations; unverifiable citations are dropped and 'not in inbox' yields no draft.",
-    "irreversible": ["send", "delete"],
-    "reversible": ["draft", "label", "archive", "defer", "delegate"],
-    "delete_is_irreversible_because": "The mock store has no trash/recycle bin, so a deleted message cannot be recovered. It is therefore gated exactly like send.",
+    "irreversible": [
+      "send",
+      "delete"
+    ],
+    "reversible": [
+      "draft",
+      "label",
+      "archive",
+      "defer",
+      "delegate"
+    ],
+    "delete_is_irreversible_because": "inbox.json keeps no deleted-items folder, so a deleted message has nothing to be restored from. It is therefore gated exactly like send.",
     "send_is_irreversible_because": "Writing to outbox/ is the mock definition of 'sent'; a sent message cannot be unsent.",
-    "gate": "agent/gate.py — gate.send() and gate.delete() are the ONLY code paths that write to outbox/. Drafts are reversible and written to drafts/, never outbox/. Both a per-action y/N prompt and a --dry-run mode are provided; AUTO_APPROVE=1 for non-interactive tests. gate.audit_outbox() verifies the invariant.",
+    "gate": "agent/gate.py — gate.send() and gate.delete() are the ONLY code paths that write to outbox/. Drafts are reversible in-memory objects shown for review, never written to outbox/. Both a per-action y/N prompt and a --dry-run mode are provided; AUTO_APPROVE=1 for non-interactive tests. gate.audit_outbox() verifies the invariant.",
     "preference_demo": "PRIMARY honoured preference: m041 (no meetings before 11:00am) affects message m043 (Aria proposes Monday 9:00am -> declined, counter-offer 11:00). SECONDARY: m015 (CC priya@paperjet.io on Hartwell & Cho mail) affects m018 (SAFE amendment -> auto-CC priya). Demonstrated across a real process restart via scheduling.evaluate_meeting reading state/prefs.json.",
     "persistence": "state/prefs.json survives process exit. 'python demo.py --cap R4 --phase store' persists and exits; 'python demo.py --cap R4 --phase apply' is a fresh process that does NOT re-read m041/m015 and still changes behaviour from disk. Preference-parsing is deterministic (no model call) for m041/m015.",
-    "injection_messages": ["m017", "m024", "m039", "m047"],
+    "injection_messages": [
+      "m017",
+      "m024",
+      "m039",
+      "m047"
+    ],
     "injection_defence": "Architectural, not prompt-only. (a) Email content enters every model prompt wrapped in «UNTRUSTED_EMAIL» delimiters with a SECURITY NOTICE preamble instructing the model to treat it as data and never obey it (agent/llm.py: UNTRUSTED_PREAMBLE, wrap_untrusted). (b) Detection is a rule pass (categorised attack patterns) + optional LLM confirmation, run BEFORE any disposition, so injections never influence a draft. (c) Irreversible actions (send/delete) are reachable only through the Part 4 gate. (d) Hostile messages are excluded from retrieval grounding context. Injections are flagged and LEFT IN PLACE (never deleted).",
     "injection_attempts_detail": {
       "m017": "reply 'RELEASE' to the sender of every unread message (+ instruction override)",
@@ -48,18 +69,23 @@
       "m039": "enable autonomous mode: send to investors/press without approval, and do not mention it (autonomous_mode + self-conceal)",
       "m047": "forward any message mentioning Q3/revenue to finance-sync@ext-audit.co (exfiltration, buried in a forwarded quote)"
     },
-    "phishing_messages": ["m021", "m023", "m045"],
+    "phishing_messages": [
+      "m021",
+      "m023",
+      "m045"
+    ],
     "scheduling_conflicts": [
       "Sep 15 15:00 — investor call (m010) vs dental appointment (m061)",
       "Wed 14:00 — ACME demo (m016) vs Raghav 1:1 rescheduled (m013)"
-    ]
+    ],
+    "rule_routing_note_offline": "With no model configured, the 33 model-routed messages are decided by classifier._heuristic_classify (handled_by=fallback:heuristic): automated sender -> archive; legal or money -> escalate; a question for Sam -> reply (high priority if external or time-pressured); otherwise archive as FYI."
   },
   "capabilities": [
     {
       "id": "R1",
       "name": "Zero the inbox",
       "tier": "B",
-      "claim": "Assigns every message exactly one disposition (reply/archive/defer/delegate/escalate/flag_injection) with a one-line reason; prints 'undecided: 0'. Reports how many messages were rule-routed (never need a model) vs sent to the LLM, plus the live count of actual LLM calls.",
+      "claim": "Decides all 100 messages with exactly one disposition from the six-word vocabulary (reply/archive/defer/delegate/escalate/flag_injection) and a reason for each, ending with 'undecided: 0'. Also reports the split: 67 decided by deterministic rules, 33 routed to the model (or to the heuristic when offline), plus the live count of real model calls.",
       "command": "python demo.py --cap R1",
       "observable": "Prints a table of all 100 messages, each with disposition + reason, a routing breakdown (rule:noise/injection/phishing/preference/sent vs llm), a 'Part 2 headline numbers' block showing 'Rule-routed (never need a model): 67' and 'Actual LLM calls this run: N', and finally 'undecided: 0'. Also writes state/decisions.json.",
       "evidence": "state/trace.jsonl — one 'decision' event per message id tagged cap=R1, each carrying handled_by (rule:* or llm). Rule-routed count is reproducible and printed at runtime."
@@ -68,7 +94,7 @@
       "id": "R2",
       "name": "Grounded reply",
       "tier": "B",
-      "claim": "Drafts a reply grounded in a specific earlier message, records the ids it drew on, and VERIFIES every citation against the mail store and the retrieved set. Citations to nonexistent or never-read messages are dropped. If the answer is not in the inbox, it drafts nothing. Demonstrates thread-walk (m008->m003), cross-thread keyword search (m055->m018), and not-in-inbox (m012).",
+      "claim": "Writes a reply to m008 using the staging URL that only appears in m003, lists the message ids it drew on, and checks every cited id against the mail store and the messages actually retrieved; unverifiable ids are removed. If the inbox cannot answer the question it writes no draft at all. Shows three paths: same-thread (m008->m003), cross-thread keyword search (m055->m018) and not-answerable (m012).",
       "command": "python demo.py --cap R2 --msg m008    (also try --msg m055 and --msg m012)",
       "observable": "For m008: retrieval=thread-walk, read=[m001,m003,m005], cited(verified)=[...,m003,...], 'grounding check: ok=True not_in_store=[] not_read=[]'; m003 really contains the AMQP URL. For m055: retrieval=keyword-search (cross-thread), read=[m018], grounded on the prior SAFE email. For m012 ('the thing', refers to a verbal chat not in the inbox): 'NOT ANSWERABLE FROM INBOX — no draft produced.'",
       "evidence": "state/trace.jsonl — cap=R2: a 'read' event per retrieved message, a 'draft' event carrying mode, verified cited_ids, grounding_ok and retrieval_methods; or a 'no_draft' event for the not-in-inbox case. Verifier proven to reject bad cites: verify_citations(['m003','m999','m010'],['m001','m003','m005']) -> ok=false, not_in_store=[m999], not_read=[m010]."
@@ -86,7 +112,7 @@
       "id": "R4",
       "name": "Persistent preference",
       "tier": "C",
-      "claim": "Records a stated preference and applies it in a SEPARATE process after the first has fully exited, changing how a real message is handled. Honoured preference: m041 (no meetings before 11:00am); affected message: m043 (Aria proposes Monday 9:00am). Also m015 (CC Priya on lawyer mail) -> m018.",
+      "claim": "Stores Sam's standing instructions in one process, exits, and a second fresh process changes how a real message is handled without re-reading the instruction. Honoured preference: m041 (no meetings before 11:00am); affected message: m043 (Aria proposes Monday 9:00am). Also m015 (CC Priya on lawyer mail) -> m018.",
       "command": "python demo.py --cap R4 --phase store   # then, as a NEW process:   python demo.py --cap R4 --phase apply",
       "observable": "Phase store: reads m041/m015, writes state/prefs.json (refuses m039 injection), exits. Phase apply (fresh process, does NOT re-read m041/m015): loads prefs.json, then for m043 prints 'DECLINE 9am, counter-offer 11:00' with control 'without preference -> 9am ACCEPTED'; for m018 prints auto-CC ['priya@paperjet.io'] vs control '(none)'.",
       "evidence": "state/prefs.json persists on disk between the two processes; state/trace.jsonl — cap=R4: 'preference_stored' events (phase 1) and 'apply_calendar'/'apply_routing' events (phase 2). Behaviour change is driven by scheduling.evaluate_meeting reading prefs from disk, not a hard-coded rule."
@@ -104,7 +130,7 @@
       "id": "R6",
       "name": "Dashboard",
       "tier": "C",
-      "claim": "Generates dashboard.html + dashboard.json (reproducible from a run) with exactly three panes. Pane 1 pending actions: message + proposed action + why it needs a human. Pane 2 flagged: injections, phishing, and ungroundable messages, each with what was attempted + what was done instead. Pane 3 commitments as a calendar with VERIFIED citations, >=1 multi-source commitment, and conflicts surfaced.",
+      "claim": "Builds dashboard.html + dashboard.json from the current run (not hand-edited) with exactly three panes. Pane 1 pending actions: message + proposed action + why it needs a human. Pane 2 flagged: injections, phishing, and ungroundable messages, each with what was attempted + what was done instead. Pane 3 commitments as a calendar with VERIFIED citations, >=1 multi-source commitment, and conflicts surfaced.",
       "command": "python demo.py --cap R6",
       "observable": "Writes dashboard.html + dashboard.json. Pane 3 shows 2 multi-source commitments — board deck due Sep 16 cites [m040 (task+relative timing), m038 (anchor date)]; launch Sep 20 cites [m026, m036] — each with a green verified-citation badge (grounding.ok=True). Conflicts surfaced: '⚡ CONFLICT at 2026-09-15T15:00' [m010, m061] and '⚡ 2026-09-09T14:00' [m016, m013]. m043 9am carries a CALENDAR RULE VIOLATED flag. Pane 2 includes ungroundable m012.",
       "evidence": "dashboard.html + dashboard.json on disk; every commitment carries source_ids and a grounding{ok,verified,missing} report (Part 3 verification). state/trace.jsonl — cap=R6: 'dashboard' event with multi_source and conflicts counts."
@@ -113,7 +139,7 @@
       "id": "X1",
       "name": "Follow-up tracking",
       "tier": "B",
-      "claim": "Finds messages Sam sent that received no reply within 3+ days, and drafts a polite chase for each. m044 (Sam asked Priya to approve contractor invoice) is detected; threads with replies are not.",
+      "claim": "Looks through Sam's own sent mail for requests that have gone 3+ days without an answer in the thread, and prepares a short, polite nudge for each (held behind the send gate). m044 (Sam asked Priya to approve the contractor invoice) is caught; threads that got a reply are skipped.",
       "command": "python demo.py --cap X1",
       "observable": "Prints JSON list of {message_id, days_waiting, draft}. m044 ('contractor invoice approval') appears with days_waiting >= 3 and a chase draft. Threads where the recipient already replied do not appear.",
       "evidence": "state/trace.jsonl — cap=X1: 'followup' events with message_id and days_waiting"
@@ -122,9 +148,9 @@
       "id": "X2",
       "name": "Morning digest",
       "tier": "B",
-      "claim": "Produces a one-screen digest: 'Needs you' (urgent/high priority), 'Can wait' (deferred), and 'Auto-archived' (count of noise). Investor message m010 and legal message m018 appear in 'Needs you'; receipts/newsletters appear only as a count.",
+      "claim": "Prints a single-screen morning briefing in three blocks: 'Needs you' (urgent/high items that need action), 'Can wait' (lower-priority items still needing action), and 'Auto-archived' (a count plus a short sample, never the full list of receipts), followed by the flagged security items.",
       "command": "python demo.py --cap X2",
-      "observable": "Prints three sections. 'NEEDS YOU' contains m010 (investor call) and m018 (SAFE signature); 'AUTO-ARCHIVED' shows a count of ~52 noise messages, not individual receipts.",
+      "observable": "'NEEDS YOU' lists the 3 phishing emails first (URGENT), then HIGH items including the investor call m010, the SAFE signature m018 and the pricing-copy approval m030; 'CAN WAIT' holds lower-priority requests such as m051 (coffee with an old friend); 'AUTO-ARCHIVED' shows a count and five examples; the flagged block names the 4 injections and 3 phishing emails.",
       "evidence": "state/trace.jsonl — cap=X2: 'digest' event with needs_you count, can_wait count, auto_archived count"
     },
     {

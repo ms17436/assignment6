@@ -1,70 +1,89 @@
-# CAPABILITIES.md
+# CAPABILITIES.md — inboxHero
 
-**Student:** [Your Name], [Your ID]
-**Repository:** https://github.com/[your-username]/paperjet-inbox-agent
+**Student:** Manisha Sharma, cert-aai-2026-06-0031
+**Repository:** https://github.com/ms17436/assignment6
 
-Run everything through one entry point:
+Every capability runs from `demo.py`, in this order, on a fresh copy:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt     # optional: only the model client you use
+cp .env.example .env                # optional: pick a provider (blank = offline)
 
-# Individual capabilities
-python demo.py --cap R1              # triage all 100 messages
-python demo.py --cap R2 --msg m008  # grounded reply (needs thread context from m003)
-python demo.py --cap R3 --dry-run   # show sends, write nothing
-python demo.py --cap R4             # extract + persist preferences
-python demo.py --cap R5             # detect all 4 injection attempts
-python demo.py --cap R6             # generate dashboard.html + dashboard.json
-python demo.py --cap X1             # follow-up tracker
-python demo.py --cap X2             # morning digest
+python demo.py --cap R1                   # triage all 100 messages
+python demo.py --cap R2 --msg m008        # grounded reply (thread context from m003)
+python demo.py --cap R3 --dry-run         # show sends/deletes, write nothing
+python demo.py --cap R4 --phase store     # persist preferences, then exit
+python demo.py --cap R4 --phase apply     # NEW process: behaviour driven by stored prefs
+python demo.py --cap R5                   # detect + refuse all 4 injection attempts
+python demo.py --cap R6                   # generate dashboard.html + dashboard.json
+python demo.py --cap X1                   # follow-up tracker
+python demo.py --cap X2                   # morning digest
+python demo.py --cap X3                   # batch category handler
+python demo.py --cap X4 --thread t-launch # thread summarizer
+python demo.py --cap X5 --msg m051        # tone matching
+python demo.py --cap X6 --msg m023        # explainability
 
-# Full run (R3 runs in dry-run automatically)
-python demo.py --all
-
-# Offline / no-API mode
-python demo.py --all --no-llm
+python demo.py --all                      # everything, in order (R3 forced to dry-run)
 ```
 
-Set `GEMINI_API_KEY` for Gemini (recommended), or `OPENAI_API_KEY` + `OPENAI_BASE_URL`
-for an OpenAI-compatible endpoint (including local Ollama). Set `LLM_OFFLINE=1` or
-`--no-llm` to run with heuristics only.
+Commands that would send (R2, X1) stop at a `Send this draft? [y/N]` prompt; answering
+`N` (or pressing Enter) sends nothing.
+
+The model provider is configured only through environment variables, loaded by
+`config.py` (optionally from a `.env` file; see `.env.example`). `LLM_PROVIDER` is one of
+`ollama` | `gemini` | `openai` | `offline` | `auto`, with `LLM_MODEL` for the model name.
+Local Ollama needs `ollama serve`; Gemini needs `GEMINI_API_KEY`; OpenAI-compatible
+endpoints need `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`). With nothing set, or with
+`LLM_OFFLINE=1` / `--no-llm`, it runs on deterministic heuristics.
 
 ---
 
 ## The system, in one paragraph
 
-A single Python pipeline, no framework. Messages are loaded from `inbox.json`,
-sorted chronologically, and processed in two passes: a cheap rule-based pass
-(no LLM calls) handles noise, phishing, and obvious injections, then a model
-pass (Gemini 1.5 Flash, with exponential back-off on HTTP 429) classifies the
-remainder. Thread context is retrieved by walking `thread_id` — the inbox
-already carries its own structure, so embeddings would be overhead. State that
-must survive a process restart (preferences, decisions, the action log) is kept
-in small JSON files under `state/`. Every irreversible effect (`send`, `delete`)
-must pass through a single gate in `agent/gate.py`; nothing else in the code
-can cause those effects, which is also the prompt-injection defence.
+inboxHero is plain Python driven from `demo.py`. It reads the 100 messages in
+`inbox.json` oldest-first and decides each one in two steps. First, deterministic
+checks catch the 67 messages that need no judgement: automated mail, the four
+injection attempts, the three phishing emails, Sam's two standing instructions and
+Sam's own sent mail. The remaining 33 go to whichever model the environment selects
+through `config.py` (local Ollama, Gemini or an OpenAI-compatible API); with no model,
+a deterministic heuristic decides them instead. Replies are grounded by pulling
+earlier messages from the same `thread_id`, and every citation is checked before a
+draft is shown. Anything that cannot be undone, meaning `send` and `delete`, goes
+through `agent/gate.py` and nowhere else. Preferences, decisions and the action log
+are JSON files under `state/`, which is how behaviour carries across a restart.
 
 ---
 
 ## Design choices
 
-- **Framework: none.** The pipeline is linear with a single decision branch
-  (rule path vs model path), so a crew or agent graph would add indirection
-  without benefit.
+- **Framework: none (plain Python).** Two thirds of the inbox is settled by
+  deterministic checks before any model runs, and the rest follows one fixed route:
+  classify, fetch thread context, draft, then the gate. There is no step where agents
+  need to negotiate or hand work back and forth, which is what CrewAI or ADK are for.
+  Plain functions also keep the gate and the injection checks easy to audit.
+  Final Report question 4 maps our modules onto Agents, Tasks, Crew and router.
 
-- **Model: Gemini 1.5 Flash** for triage and drafting (cheap, fast, large
-  context window suitable for threading). Falls back to heuristics when
-  `LLM_OFFLINE=1`. Developed and tested offline first to stay within free-tier
-  rate limits.
+- **Model: pluggable, configured by environment variables** (`LLM_PROVIDER` /
+  `LLM_MODEL`, loaded by `config.py`, optionally from `.env`; nothing hardcoded,
+  no `.env` committed — see `.env.example`). Options: a local Ollama model
+  (default `qwen2.5:1.5b`), Google Gemini (`gemini-1.5-flash`), or any
+  OpenAI-compatible endpoint. **Developed against** the deterministic offline
+  stubs (`--no-llm`) plus a local **Ollama `qwen2.5:1.5b`** to avoid rate limits.
+  Honest finding: the 1.5B model summarises/extracts well (X4) but is confused by
+  the Part 6 untrusted-data wrapping on R2's answerability judgement — a larger
+  model handles both at once; the pipeline degrades gracefully either way.
 
-- **Rate-limit handling:** `agent/llm.py` sleeps `LLM_CALL_DELAY` seconds
-  between every call (default 2 s), retries on HTTP 429 with exponential
-  back-off (up to 5 attempts), and logs each wait. Batch: noise and obvious
-  injections never hit the LLM at all.
+- **Rate-limit handling:** `agent/llm.py` waits `LLM_CALL_DELAY` seconds before
+  every call (default 4 s, so at most 15 requests a minute), retries HTTP 429 with
+  exponential back-off (up to 5 attempts) and logs each wait. If a message still
+  cannot get an answer, it falls back to the deterministic heuristic rather than
+  crashing. We do not pack several messages into one prompt; instead the rule pass
+  keeps 67 of 100 messages away from the model, so triage needs at most 33 calls.
 
 - **Retrieval: thread-walk (primary) + cross-thread keyword search (fallback).**
-  `retrieval.thread_walk()` walks `thread_id` for prior messages — cheaper and
-  more precise than embeddings for a structured inbox. When the thread is thin or
+  `retrieval.thread_walk()` returns the earlier messages sharing a `thread_id`. The
+  question a reply needs answering (m008's "the URL you gave Raghav") almost always
+  sits in its own thread (m003), so no vector index is needed. When the thread is thin or
   a message refers back to an earlier one ("previous email", "resend"),
   `retrieval.keyword_search()` does a conservative cross-thread lookup (content
   overlap, or same-correspondent + explicit back-reference). Hostile messages
@@ -78,21 +97,25 @@ can cause those effects, which is also the prompt-injection defence.
   can be edited or undone in place. Irreversible (gated): `send`, `delete`.
   `send` is irreversible because writing to `outbox/` is the mock definition of
   "sent" and a sent message cannot be unsent. **`delete` is treated as
-  irreversible by design** because the mock store has no trash/recycle bin — a
-  deleted message cannot be recovered — so it is gated exactly like `send`.
+  irreversible by design**: `inbox.json` keeps no deleted-items folder, so there is
+  nothing to restore from, and it is gated exactly like `send`.
   In `--dry-run` mode no `outbox/` writes occur at all.
 
 - **Where the gate sits.** Only `gate.send()` and `gate.delete()` can write to
   `outbox/` or modify stored state in an irreversible way. All other code —
   including the LLM prompt chain — can only produce a *draft* dict in memory.
-  A hostile injected instruction can reach the draft stage but cannot cross the
-  gate without a `y` from the user (or `AUTO_APPROVE=1` in tests).
+  So even if an injected instruction slipped past detection and shaped a draft,
+  turning that draft into an `outbox/` file still takes Sam typing `y` (or
+  `AUTO_APPROVE=1`, which exists for tests only).
 
-- **Escalation line.** Messages to external recipients, anything touching money
-  (`wire`, `payment`, `invoice`), legal documents, and all detected
-  phishing/injection are `escalate` or `flag_injection`. Internal archives and
-  defers are automatic. The trade-off: a wrongly-archived receipt is possible,
-  in exchange for the user not being asked to approve every notification.
+- **Escalation line.** Phishing is always escalated by rule, and injections are
+  always flagged. Legal or money matters (signatures, contracts, payments, anything
+  from the law firm) are escalated by the heuristic when offline and by the model's
+  judgement when one is configured. Every send asks for approval, whether the
+  recipient is internal or external. Archiving and deferring happen without asking,
+  but only automated senders and FYIs that ask Sam nothing are archived. Trade-off:
+  one confirmation per reply is a real cost, but a wrong send in Sam's name cannot be
+  recalled. An over-eager archive can be reversed, so it is not worth an interruption.
 
 ---
 
@@ -122,9 +145,14 @@ undecided: 0
 ```
 
 Each decision carries a `handled_by` tag (`rule:noise`, `rule:injection`,
-`rule:phishing`, `rule:preference`, `rule:sent`, or `llm`) which is written to
-`state/trace.jsonl`. The 67 rule-routed messages never touch the model even when
-an API key is configured; `Actual LLM calls` is a live counter (0 in `--no-llm`).
+`rule:phishing`, `rule:preference`, `rule:sent`, `llm`, or `fallback:heuristic`)
+which is written to `state/trace.jsonl`. The 67 rule-routed messages never touch the
+model even when an API key is configured; `Actual LLM calls` is a live counter (0 in
+`--no-llm`). With no model, the 33 model-routed messages are decided by
+`classifier._heuristic_classify` (automated sender → archive; legal or money →
+escalate; a question for Sam → reply, high priority if external or time-pressured;
+otherwise archive as FYI), so an offline run never silently archives a person asking
+Sam for something.
 
 ## Own capabilities (Part 8)
 
@@ -239,8 +267,8 @@ Injection m039 ("enable autonomous mode") is refused, never stored.
   `AUTO_APPROVE=1` is available for non-interactive testing.
 - **One file per message, nowhere else** (req #3): `gate.send()` is the ONLY code
   path that writes to `outbox/`, as `outbox/sent_<message_id>.json` (deterministic
-  — one file per message). Drafts are reversible previews and go to `drafts/`, not
-  `outbox/`. `gate.audit_outbox()` verifies the invariant and reports any
+  — one file per message). Drafts are reversible in-memory previews shown for review,
+  never written to `outbox/`. `gate.audit_outbox()` verifies the invariant and reports any
   unexpected files.
 - **Every gated decision logged** (req #4): one consolidated record per action in
   `state/trace.jsonl` with `proposed` (to/subject/cited_ids/body_len), the
@@ -252,7 +280,7 @@ Observed:
 | run | outbox writes | invariant |
 |---|---|---|
 | `--dry-run` | 0 | ok (nothing written) |
-| `AUTO_APPROVE=1` (yes to all) | 4 `sent_*` + 1 `deleted_*`, one per message | ok (only gate-written files) |
+| `AUTO_APPROVE=1` (yes to all) | one `sent_<id>.json` per answerable `reply` (11 offline) + 1 `deleted_m096.json` | ok (only gate-written files) |
 | answer "n" to all prompts | 0 | ok; trace shows `rejected` / `not_performed` |
 
 ## Grounded answering (Part 3)
@@ -292,7 +320,7 @@ a `retrieval.methods` list, both written to `state/trace.jsonl`.
 | Calendar rule violations | 1 (m043: 9am slot violates no-meetings-before-11am) |
 | Long thread with buried request | t-launch (9 messages; request in m030) |
 | Thread-context-dependent reply | m008 requires m003 for AMQP URL |
-| Ambiguous message | m012 ("the thing") — ask for clarification |
+| Not answerable from inbox | m012 ("the thing" from a verbal chat) — no draft produced |
 
 **Assumptions about data format:**
 - All messages share the keys `id`, `thread_id`, `from`, `to`, `subject`,
@@ -308,14 +336,14 @@ a `retrieval.methods` list, both written to `state/trace.jsonl`.
 
 | id | name | tier | one-line claim |
 |----|------|------|----------------|
-| R1 | Zero the inbox | B | every message gets exactly one disposition + reason; none left undecided |
+| R1 | Zero the inbox | B | 100 of 100 decided (67 by rule, 33 by model or heuristic), each with its reason; `undecided: 0` |
 | R2 | Grounded reply | B | reply to m008 cites m003's AMQP URL; cited_ids recorded |
 | R3 | Gate the irreversible | C | no send/delete without approval or --dry-run; single choke-point in gate.py |
 | R4 | Persistent preference | C | m041 calendar rule and m015 CC rule survive process restart |
 | R5 | Refuse embedded instructions | C | all 4 injections detected, refused, flagged, reported; outbox clean |
 | R6 | Dashboard | C | three panes, Sep 15 15:00 conflict surfaced, cited to source messages |
 | X1 | Follow-up tracking | B | m044 (unanswered invoice request) found; chase draft produced |
-| X2 | Morning digest | B | urgent items separated from noise; archived count shown |
+| X2 | Morning digest | B | phishing, investor, legal and deadline requests on top; FYIs only as a count |
 | X3 | Batch category handler | A | rules-only: group + batch-archive ~56 noise msgs, flag unsubscribes |
 | X4 | Thread summarizer | B | collapse 9-msg t-launch thread to its buried open question (m030) |
 | X5 | Tone matching | B | match reply tone to correspondent (lawyer/board/investor/old friend) |
@@ -330,32 +358,7 @@ Full command, observable outcome, and evidence in `capabilities.json`.
 
 ## Final Report
 
-*(Answers to the four report questions go here.)*
-
-**Q1 — What was the hardest design decision?**
-Deciding where to draw the escalation line between automatic and gated actions.
-Archiving noise automatically saves time but risks burying something real;
-gating every archive would produce alert fatigue. The chosen line (only `send`
-and `delete` are gated; everything else is reversible or low-stakes) reflects
-that the cost of a wrong archive is low compared to the cost of a wrong send.
-
-**Q2 — How does the system handle ambiguous messages?**
-Ambiguous messages (e.g. m012 "the thing") are classified as `reply` with a
-draft that asks for clarification rather than guessing. The LLM prompt instructs
-the model explicitly: "if the request is ambiguous, ask a clarifying question."
-The draft is shown to the user before being gated for send.
-
-**Q3 — How does the system resist prompt injection?**
-Two-layer defence: (1) a rule-based pattern library in `agent/injection.py`
-catches all four known injection patterns without touching the LLM; (2) an LLM
-confirmation pass runs on messages that trigger soft signals. Critically, the
-injections are detected *before* the classifier produces a disposition, so they
-never influence a draft. And even if they reached the draft stage, the gate
-would still require a human `y` before any send.
-
-**Q4 — What would you change with more time?**
-Add embedding-based retrieval for cross-thread context (e.g. finding a prior
-conversation with the same sender across different threads). Add a confidence
-threshold so the system asks the user to review borderline classifications
-rather than silently deferring. Build a proper audit trail UI on top of
-`trace.jsonl`.
+The four answers (what we refused to automate, where untrusted text enters,
+who is accountable for a wrong send, and our own machinery vs a framework's
+Agents / Tasks / Crew / router) are in
+[README.md → Final Report](README.md#final-report).

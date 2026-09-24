@@ -60,7 +60,7 @@ def print_digest(digest: dict, msgs_by_id: dict):
     bar = "=" * 60
 
     print(f"\n{bar}")
-    print("  📬  MORNING DIGEST — PaperJet Inbox")
+    print("  📬  MORNING DIGEST — inboxHero")
     print(f"{bar}\n")
 
     # Section 1
